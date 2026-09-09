@@ -1,0 +1,29 @@
+site_name: reactmetric
+site_description: "REACT: a metric for how quickly trajectory forecasts recover after disruptive events."
+repo_url: https://github.com/standard-ai/react
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - The REACT metric: concepts.md
+  - Calibration policy: calibration.md
+  - I/O formats: io.md
+  - Datasets: datasets.md
+  - API reference: api.md
