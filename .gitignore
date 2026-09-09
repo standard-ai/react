@@ -32,3 +32,6 @@ site/
 
 # Analysis outputs (large, regenerable)
 outputs/
+
+# Locally exported dataset subsets (large, regenerable)
+.data/
