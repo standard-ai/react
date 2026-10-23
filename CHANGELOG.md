@@ -1,8 +1,31 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.2.0 (unreleased)
 
-Initial public release of `reactmetric`.
+REACT as published in Breseman and Woollard, *REACT: Measuring Regime Adaptation in
+Trajectories* (TGF 2026). The library reproduces the paper's per-event results exactly
+(`tests/parity/`). 0.1.0 was never released; its metric is removed.
+
+- `ReactScorer.fit(calib, info=...)` / `.evaluate(forecasts, test)` → `ReactResult`: onset,
+  recovery, censoring and relapse per event, lead, information level and target distance, with
+  Oracle B; Kaplan-Meier summaries over all events and given onset, restricted means.
+- `reactmetric.information`: the truth posterior with a measurement-noise floor, exact regime
+  tests against the two-regime climatology, overlap tables, native mixture scoring, distortion
+  margins, and the paper's information-level rule (`select_info_level`).
+- `MixturePredictive`: Gaussian-mixture forecasts, scored natively.
+- `events.BayesianChangepoints.tuned_sg()`: the paper's event detector.
+- `reference.fit_climatology`: the paper's two-regime climatology.
+- Issue frames now follow the field's convention: the issue frame is the last observed frame,
+  and lead h targets issue + h (was issue + h - 1).
+- `benchmark`, the CLI and `viz` rewired onto the scorer.
+- Removed: the three-consecutive-frames rule and `evaluate`, `ReactConfig`, the old oracles,
+  CRPS / energy scoring, sweeps and the non-standard `forecast_accuracy`, the calibration
+  report and counterfactual REACT, the global and position references, the PELT detector.
+  scikit-learn is no longer a dependency.
+
+## 0.1.0 (not released)
+
+Pre-paper version, superseded by 0.2.0.
 
 - Core ND data model: `Trajectory`, `TrajectorySet`, `Predictive` (gaussian / isotropic / from_samples).
 - REACT measurement: onset/recovery, Kaplan-Meier survival, cluster-bootstrap CIs, by-event-type, steady-state informativeness, excess-REACT.

@@ -1,52 +1,89 @@
 # The REACT metric
 
-## Information score
+REACT (Regime Event Adaptive Correction Time) follows a probabilistic trajectory forecast through a detected change in a person's motion (a stop, a start, a turn, a change of speed). It asks four questions per event: did the forecast stay ahead of a climatological reference through the change (**anticipation**), how long did it take to become confidently ahead again (**REACT**), did that happen within the window (**censoring**), and did it hold (**relapse**). The method is that of Breseman and Woollard, *REACT: Measuring Regime Adaptation in Trajectories* (TGF 2026); this page summarizes it and names the library objects that implement each part.
 
-For a forecaster $m$ producing a predictive density $p_m$ over future positions, and a reference (climatology) density $p_\text{ref}$, the per-frame **information score** is
+Every REACT number depends on two choices and one assumption, and carries them:
 
-$$ s_m(f) = \mathrm{nll}_\text{ref}(f) - \mathrm{nll}_m(f) \quad (\text{nats}), $$
+$$\mathrm{REACT}(h, d;\ I_{\text{traj}})$$
 
-a pointwise log Bayes factor. $s_m(f) > 0$ means the model is more informative than the climatology at frame $f$; $s_m(f) < 0$ means it is *worse than knowing nothing*.
+the forecast lead $h$ (frames), an optional target distance $d$ (metres; $d = \infty$ is the plain comparison with climatology), and the assumed information level $I_{\text{traj}}$ (nats). The decision threshold, onset window and noise floor are fixed per dataset and reported once.
 
-Using the strictly proper log score is deliberate: a miscalibrated forecast is *deservedly* penalized (see [Calibration policy](calibration.md)). CRPS / energy-score variants are available via `scoring="crps"|"energy"` for users who cannot supply trustworthy covariances.
+## Usefulness against a latent truth
 
-## Onset, recovery, and REACT
+At frame $t$ a forecaster issued at $t-h$ gives a density $p_t$ for the position $y_t$; the climatology gives $r_t$. The realized score is
 
-After a regime change (a "commitment event") at frame $t_0$:
+$$s_t = \log p_t(y_t) - \log r_t(y_t)$$
 
-- **onset**: $s_m < 0$ sustained for `onset_consecutive` frames — the forecast has fallen below the reference;
-- **recovery**: $s_m \ge \epsilon$ sustained for `recovery_consecutive` frames — it beats the reference by the task margin $\epsilon$ again.
+in nats, an unbiased draw of the forecast's true information advantage $A_t = \mathrm{KL}(q_t \| r_t) - \mathrm{KL}(q_t \| p_t)$, where $q_t$ is the true law of $y_t$. One draw is noisy, so REACT decides on $A_t$, not $s_t$. It models the truth locally as a Gaussian around an unknown centre whose prior is the climatology's own spread, per climatology regime $k$ (walking or stopped):
 
-$$ \mathrm{REACT}(e) = f_\text{recovery} - t_0. $$
+$$m_t \mid k \sim \mathcal N\big(\mu_{k,t},\ (1-c)\Sigma_{k,t} - \sigma^2 I\big), \qquad q_t = \mathcal N\big(m_t,\ c\,\Sigma_{k,t} + \sigma^2 I\big), \qquad c = e^{-I_{\text{traj}}}$$
 
-If there is no sustained onset after $t_0$, the model **anticipated** the event ($\mathrm{REACT}=0$). If it never recovers within the window it is **right-censored** (and **superseded** if the window was cut short by the next event).
+so before any observation $y_t$ is distributed exactly as the climatology. $I_{\text{traj}}$ is how much of the next position is assumed knowable beyond climatology; $\sigma$ is the measurement-noise floor, which keeps the modelled truth from being sharper than the sensor. The posterior of $m_t$ is inferred from the whole observed track and is the same for every model; the model enters only through its density.
 
-Target-frame indexing keeps the x-axis as "frames since the maneuver was observed": the lead-$h$ forecast of frame $f$ is issued at $f-h+1$, so a maneuver at $t_0$ elevates the trace at $t_0$, not $h$ frames before any evidence exists.
+Library: `reactmetric.information.truth_posterior`, `RegimeTests`, `estimate_noise_floor`.
 
-## Survival summary
+## Decisions and outcomes
 
-Recovery times are right-censored, so REACT is summarized by the **Kaplan-Meier** survival function over events, with **cluster-bootstrap** confidence intervals (resampling tracks, since events within a track are not independent). The atom at zero is the anticipation rate.
+For each frame of an event window REACT computes the posterior probabilities that the forecast is behind, $P(A_t < 0 \mid y)$, and ahead by a margin, $P(A_t > \varepsilon_t \mid y)$, exactly (no Monte Carlo). A verdict needs probability at least $\gamma = 0.95$. For an event at $t_0$ with window end $T = \min(t_0 + 150,\ t_{\text{next}})$:
 
-## The reference climatology
+$$t_{\text{on}} = \min\{t_0 < t \le t_0 + h + 5 : P(A_t < 0 \mid y) \ge \gamma\}, \qquad t_{\text{rec}} = \min\{t_{\text{on}} < t \le T : P(A_t > \varepsilon_t \mid y) \ge \gamma\}$$
 
-The reference conditions only on event-continuous quantities so it is not itself surprised by the maneuvers REACT measures:
+and $\mathrm{REACT} = t_{\text{rec}} - t_0$.
 
-- **`global`** — the marginal law of lead-step displacements (a Gaussian mixture).
-- **`kinematic`** (default, 2D) — conditioned on causal speed and heading (body-frame), so trivially-predictable persistence is conditioned out while genuine maneuvers still surprise it.
-- **`position`** — environment structure via position-binned mixtures, shrunk toward the global law.
+| Outcome | Meaning |
+| --- | --- |
+| anticipated | no onset within the onset window $t_0 + h + 5$ |
+| recovered | onset, then a confident recovery within the window |
+| censored | onset, no recovery before the window ends |
+| relapsed | after recovery, confidently behind on three consecutive frames starting within 10 frames |
 
-A fixed broad **floor component** bounds the reference surprise so rare large displacements cannot mechanically flatter a heavy-tailed model.
+Recovery times are right-censored, so they are summarized with Kaplan–Meier curves: over all events (anticipated ones count as recovered at frame 0) and given onset. Median REACT is the median given onset; the restricted mean (area under the curve to 150 frames) stays informative when most events are anticipated. REACT is a profile, not one leaderboard number: anticipation, recovery time, completeness and relapse can favour different models.
 
-## The oracle ladder
+Library: `reactmetric.information.classify_lazy`; `ReactResult.summary()` and `ReactResult.table()`.
 
-REACT separates *intrinsic event difficulty* from *model deficiency*:
+## Distortion targets
 
-- **Oracle A (hindsight)** — acausal smoother; events where even it is surprised are tracking artifacts (`filter_artifacts`).
-- **Oracle B (climatology-seeded)** — best causal forecast given only post-change information; its REACT is the irreducible re-estimation **floor**.
-- **Oracle C** — Oracle B plus the quickest-detection delay (`detection_floor_frames`).
+Beating climatology is a relative advantage, not a spatial precision. With a target distance $d$, recovery requires beating climatology by enough information to localize the person within RMS distance $d$:
 
-**Excess REACT** of model $m$ on event $e$ is $\mathrm{REACT}_m(e) - \mathrm{REACT}_\text{oracle}(e)$ — how far the model is from the best possible causal recovery.
+$$\varepsilon_t(d) = \max\big(0,\ H_{r,t} - (1 + \log 2\pi + \log(d^2/2))\big)$$
 
-## Rate-distortion task anchors
+with $H_{r,t}$ the entropy of a Gaussian with the climatology's full covariance. The paper's headline target is $d = 0.1$ m. A target finer than the truth's own spread is unreachable; Oracle B's censoring at each $d$ is the check.
 
-For a concrete localization task (RMS error $d$), the necessary information is the Gaussian rate $\epsilon^\* = \tfrac{1}{2}\log\!\frac{\det\Sigma_\text{ref}}{\det\Sigma_d}$. `rm.task_react(...)` sets $\epsilon = \epsilon^\*$ so REACT becomes "time to recover enough information to localize at $d$".
+Library: `reactmetric.information.distortion_margin`.
+
+## Events
+
+Events come from the trajectory alone: an offline Bayesian changepoint model (Fearnhead 2006) on Savitzky–Golay-smoothed speed, turn rate and velocity components, with a tuned hazard and minimum segment length, then typed as stop, start, speed change or turn from the motion before and after. Detector errors change which transitions are evaluated (false events inflate anticipation; missed changes can show up as relapses). Labelled or externally defined events can be supplied instead.
+
+Library: `reactmetric.events.BayesianChangepoints.tuned_sg()`; `reactmetric.events.from_times` for your own events.
+
+## Climatology
+
+The reference is the distribution of a person's position $h$ frames ahead given only their most recent one-frame displacement: a speed-conditioned mixture of a moving regime (in the body frame of the current speed and heading) and a stopped regime around the current position, fitted by EM on calibration tracks. It is not an uninformative null: a strong forecaster beats it on average and can still fall behind it around a change.
+
+Library: `reactmetric.reference.fit_climatology`.
+
+## Oracle B and the information level
+
+Oracle B is the hindsight posterior predictive under the same truth model: the most any forecast could extract given the assumptions. Its REACT is the earliest time a forecast's advantage could be confirmed, and its never-recovered rate shows whether a target is reachable.
+
+$I_{\text{traj}}$ is an assumption, not an estimate. A forecaster's mean gain on calm stretches bounds it from below (the *demonstrated information*). In simulation, under-assuming information causes false onsets for sharp forecasters while over-assuming is comparatively benign, so the paper reports 3, 4.2 and 6 nats and picks the headline by a stated rule: the lowest level at which Oracle B recovers on at least 95% of events at every lead (4.2 nats).
+
+Library: Oracle B is scored automatically as `oracle_B`; `reactmetric.select_info_level` applies the rule; `ReactScorer.calibration[lead]["calm_mean_score"]` holds the demonstrated information when models are passed to `fit`.
+
+## Defaults
+
+The library's defaults are the paper's, at 10 Hz:
+
+| Setting | Default |
+| --- | --- |
+| leads $h$ | 1, 5, 10, 15 frames |
+| information levels | 3, 4.2, 6 nats |
+| target distances | $\infty$, 0.1 m, 0.3 m |
+| decision probability $\gamma$ | 0.95 |
+| onset window | $h + 5$ frames |
+| window | 150 frames (15 s) or the next event |
+| minimum window | 25 frames to the next event |
+| relapse | 3 consecutive frames starting within 10 frames of recovery |
+| noise floor | estimated from stationary calibration frames |
+| events | `BayesianChangepoints.tuned_sg()` (hazard 9e-4, minimum segment 30 frames) |

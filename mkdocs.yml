@@ -20,10 +20,19 @@ markdown_extensions:
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
+# internal working notes, not part of the published docs
+exclude_docs: |
+  paper-todo.md
+  todo-tonight.md
+  revision-status.md
+  rigor-review-*.md
+  react-spec.md
+  recovery-rule.md
+
 nav:
   - Home: index.md
   - The REACT metric: concepts.md
-  - Calibration policy: calibration.md
+  - Calibration: calibration.md
   - I/O formats: io.md
   - Datasets: datasets.md
   - API reference: api.md

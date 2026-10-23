@@ -1,43 +1,11 @@
-# Calibration: call out, never correct
+# Calibration
 
-REACT is built on the log score, a **strictly proper** scoring rule. That makes it calibration-sensitive *by design*: a forecast that fails to recover utility because its uncertainty is wrong has genuinely failed, and REACT should report that — not erase it.
+REACT is built on the log score, a strictly proper scoring rule, so it scores a forecast as delivered: a forecast whose uncertainty is wrong pays for it, and REACT reports that rather than correcting it. In the paper's known-truth simulation, REACT confirms recovery for an overconfident version of the oracle on only 14 of 734 events: overconfidence is penalized even when the forecast centre is right.
 
-So `reactmetric` **diagnoses** calibration loudly but **never modifies** your forecast.
+To separate skill from calibration, the paper rescales each forecaster's covariance by its best-fitting factor $q^*$ on the calibration tracks and repeats the evaluation across scales around it (section 4.4, Fig. 9). Rescaling trades anticipation against completeness of recovery, but does not remove the differences in recovery timing between model families. That analysis is `experiments/exp11_react_vs_calibration.py`; it scores a hypothetical forecast, so keep it apart from the headline numbers.
 
-## The report
+Practical checks before reading REACT numbers:
 
-```python
-rep = rm.calibration.report(forecaster_or_predictives, data, ref, events=events)
-rep.coverage_chi2     # mean squared Mahalanobis; == D when calibrated, > D overconfident
-rep.pit               # per-axis PIT uniformity (KS p-values)
-rep.sharpness         # mean predictive log-volume (only meaningful with calibration)
-rep.mean_bias         # per-axis mean residual (catches unit/frame bugs)
-rep.is_calibrated
-print(rep.summary())
-```
-
-Computed on the **steady-state** (event-masked) frames of the calibration split, where forecasts should be calibrated if they are calibrated anywhere. A materially miscalibrated model raises a `UserWarning` (so it surfaces in benchmark runs).
-
-## Why not just rescale?
-
-Two reasons we refuse to auto-correct:
-
-1. Rescaling covariances scores a **different, hypothetical forecast** — not the one you deliver.
-2. A steady-state scalar fix does **not even guarantee** the model clears the event-region recovery threshold, so a "calibrated" model can still fail REACT.
-
-## The opt-in counterfactual
-
-If you *do* want to ask "what would REACT be if my covariances were scalar-calibrated?", that is an explicit, clearly-labeled analysis — never the headline number:
-
-```python
-cf = rm.calibration.counterfactual_react(predictives, data, ref, events, lead=10)
-print(cf.summary())   # delivered vs. T = mean_mahalanobis/D recalibrated; marked HYPOTHETICAL
-```
-
-## Escape hatch
-
-If you cannot supply trustworthy covariances at all, use the calibration-robust scoring variants:
-
-```python
-rm.evaluate(..., scoring="crps")     # or scoring="energy"
-```
+- **Units and frame rate.** Positions in metres at 10 Hz; covariances in square metres. Unit errors look like extreme miscalibration.
+- **Indexing.** The issue frame is the last observed frame and lead h targets issue + h ([I/O formats](io.md)). An off-by-one forecast scores as a lagging one.
+- **Demonstrated information.** Pass your models to `ReactScorer.fit(..., forecasts=...)`; `scorer.calibration[lead]["calm_mean_score"]` is each model's mean realized gain over climatology on calm stretches. A model far below the others there is likely miscalibrated or misaligned.

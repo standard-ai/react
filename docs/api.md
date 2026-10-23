@@ -1,72 +1,50 @@
 # API reference
 
-The API is layered: a one-call high-level path, a composable mid-level, and the low-level primitives. `import reactmetric as rm`.
+`import reactmetric as rm`. Three layers: one call, the scorer, and the pieces it is built from.
 
-## Layer 0 — one call
+## One call
 
-- `rm.benchmark(forecasts, data, calibration, baselines=..., oracle=..., lead=..., epsilon=...)` → `BenchmarkReport`
+- `rm.benchmark(forecasts, data, calibration, baselines=("ConstantVelocity", "CTRV", "IMM"), info=(3.0, 4.2, 6.0), leads=(1, 5, 10, 15), distortions=(0.1, 0.3), n_jobs=1, **fit_kwargs)` → `ReactResult`
 
-## Layer 1 — core data model
+## The scorer
 
-- `rm.Trajectory(positions, dt=, id=, times=)` — `.T`, `.D`, `.positions`, `.velocity(window)`, `.from_dataframe(...)`
-- `rm.TrajectorySet({id: traj})` — `.ids`, `.split(fraction, seed)`, `.from_dataframe(...)`, `.from_arrays(...)`
-- `rm.Predictive.gaussian(issue_frames, means, covs)` / `.isotropic(...)` / `.from_samples(...)`
-  - `.at_lead(h)`, `.nll_matrix(obs)`, `.nll(traj, scoring=)`
-- `rm.Forecasts.from_dataframe(...)`, `.from_npz(...)`, `.to_npz(...)`
+- `rm.ReactScorer.fit(calib, info=(3.0, 4.2, 6.0), *, leads, sigma="estimate", distortions=(0.1, 0.3), events=None, p=0.95, lead_info=None, climatology=None, forecasts=None, model_leads=None, table_dir=None, n_jobs=1, seed=0)`
+  - `.evaluate(forecasts, data, *, model_leads=None, n_jobs=1)` → `ReactResult`
+  - `.score_track(traj, predictives, events=None)` → per-event records for one track
+  - `.levels[lead]` (information levels with fitted correlations), `.sigma`, `.noise_floor`, `.calibration[lead]` (including `calm_mean_score`, the demonstrated information, when `forecasts` were given)
+- `rm.ReactResult`
+  - `.records`: one dict per (lead, information level, distortion, model, event): `status` (`recovered` / `censored` / `better` / `indistinguishable`), `onset`, `react`, `duration`, `relapse`, `relapse3`, event descriptors, realized scores
+  - `.summary()` → `{(lead, info, distortion, model): profile}` with `anticipation`, `recovered`, `censored`, `km_react` (median given onset), `km_react_overall`, `rmst`, `rmst_cond`, `relapse`, `relapse3`, `mean_I`, …
+  - `.table(lead=, info=, distortion=)` (pandas), `.to_dataframe()`, `.to_json(path)`, `.to_csv(path)`, `.settings()`, `.info_level(distortion)`
+- `rm.select_info_level(summary, distortion, threshold=0.95)`: the paper's rule for the headline level
 
-## Layer 2 — forecasters and baselines
+`forecasts` is a mapping name → forecaster (anything with `predict(traj) -> Predictive`) or `{track id: Predictive}`, or a zero-argument callable returning that mapping (built once per worker process).
 
-- `rm.forecasters.from_callable(fn, name=)`, `from_precomputed(dict, name=)`
-- `rm.baselines.ConstantVelocity(...)`, `CTRV(...)`, `IMM(...)`
-- `rm.baselines.GRUPosition()`, `GRUOrientation()` — pretrained on a large
-  retail pedestrian corpus (extras=[torch]; checkpoints ship with the package)
-- `rm.baselines.available()`, `rm.baselines.build(name, **kwargs)`
+## Data
 
-## Layer 3 — reference / climatology
+- `rm.Trajectory(positions, dt=, id=, times=)`, `rm.TrajectorySet({id: traj})`: `.ids`, `.split(fraction, seed)`, `.from_dataframe(...)`, `.from_arrays(...)`
+- `rm.Predictive(issue_frames, means, covs)`: Gaussian forecasts, means (n, H, D), covs (n, H, D, D). The issue frame is the last observed frame; lead h targets issue + h. `.gaussian(...)`, `.isotropic(...)`, `.from_samples(...)` (moment-matched), `.at_lead(h)`, `.nll_matrix(obs)`
+- `rm.MixturePredictive(issue_frames, weights, means, covs)`: Gaussian-mixture forecasts, scored natively. `.mixture_at_lead(h)`; its `means`/`covs` are the moment-matched Gaussian
+- `rm.Forecasts.from_dataframe(...)`, `.from_npz(...)`, `.to_npz(...)`: see [I/O formats](io.md)
 
-- `rm.reference.Climatology.fit(calib, leads=, mode="kinematic"|"global"|"position", k=)`
-- `ref.nll_trace(traj, lead)`, `cv_nll_trace(...)`, `score_trace(traj, lead, scoring)`
-- `ref.eps_star(lead, d_meters)`, `supported_distortion(lead)`, `displacement_prior(lead, speed, heading)`
-- `rm.reference.save(ref, path)`, `rm.reference.load(path)`
+## Baselines
 
-## Layer 4 — events
+- `rm.baselines.ConstantVelocity(...)` (`.fit(calib)`: maximum likelihood), `CTRV(...)`, `IMM(...)` (`.fit(calib, bounds=...)`)
+- `rm.baselines.GRUPosition()`, `GRUOrientation()` (extras=[torch])
+- `rm.baselines.build(name, **kwargs)`, `rm.baselines.available()`
 
-- `rm.events.KinematicChangepoints(config=rm.events.SegmentationConfig(...))` — `.detect(traj)`, `.detect_set(ts)`, `.calibrate_penalty(...)`
-- `rm.events.KinematicChangepoints.from_preset("high"|"medium"|"low"|"very-low")`
-- `det.calibrate_events_per_track(calib, target_events_per_track=...)`, `det.calibrate_events_per_minute(calib, target_events_per_minute=...)`
-- `rm.events.from_times({id: [t0, ...]})`
-- `rm.events.RupturesDetector(...)` (extras=[cpd])
+## Pieces
 
-## Layer 5 — calibration
+- `rm.events.BayesianChangepoints.tuned_sg()`: the paper's detector; `rm.events.from_times({id: [t0, ...]})`; `rm.events.RupturesDetector(...)` (extras=[cpd])
+- `rm.reference.fit_climatology(calib, leads)`: the two-regime climatology; `.mixture_frames(traj, lead)`, `.gaussian_frames(...)`, `.nll_trace(traj, lead)`; `rm.reference.save` / `load`
+- `rm.information`: `truth_posterior`, `RegimeTests`, `RegimeTestsMixture`, `OverlapTable`, `regime_predictive` (Oracle B), `classify_lazy`, `distortion_margin`, `estimate_noise_floor`
+- `rm.kaplan_meier`, `rm.km_median`, `rm.cluster_bootstrap_ci`
+- `rm.viz.km_curves(result, lead, info, distortion=0.0, given_onset=True)`, `rm.viz.outcome_profile(...)`, `rm.viz.react_label(lead, d, info)` (extras=[viz])
+- `rm.datasets`: see [Datasets](datasets.md)
 
-- `rm.calibration.report(...)` → `CalibrationReport` (`.coverage_chi2`, `.pit`, `.sharpness`, `.mean_bias`, `.is_calibrated`, `.summary()`)
-- `rm.calibration.counterfactual_react(...)` — opt-in only
+## Command line
 
-## Layer 6 — the REACT measurement
-
-- `rm.evaluate(forecaster, data, ref, events, lead=, epsilon=, reference_kind="climatology"|"cv", scoring="nll"|"crps"|"energy", config=)` → `ReactResult`
-- `ReactResult`: `.anticipation_rate`, `.failure_rate`, `.superseded_rate`, `.mean_react_uncensored`, `.km_curve(...)`, `.km_median(...)`, `.steady_state_mean_info`, `.by_event_type()`, `.bootstrap_ci(stat, n_boot)`, `.attach_excess(oracle_result)`, `.mean_excess_react`, `.measurements`, `.to_dict()`
-
-## Layer 7 — oracles
-
-- `rm.filter_artifacts(events, data, ref, oracle=rm.oracles.Hindsight(...))` → `(genuine, artifacts)`
-- `rm.oracles.ClimatologySeeded(...)` (Oracle B; pass to `rm.evaluate`)
-- `rm.oracles.oracle_c_react(react_b, detection_floor)`, `oracle_c_result(result_b, events)`
-
-## Layer 8 — sweeps and accuracy
-
-- `rm.lead_sweep(...)`, `rm.epsilon_sweep(...)`
-- `rm.rate_distortion_anchors(ref, lead, distortion_targets_m)`, `rm.task_react(...)`
-- `rm.forecast_accuracy(forecasters, data, leads)` — ADE/FDE/NLL by lead
-
-## Layer 9 — benchmark, viz, datasets
-
-- `rm.Benchmark(reference, events, config)` — `.add(...)`, `.add_baseline(...)`, `.add_oracle(...)`, `.run(data)`
-- `BenchmarkReport`: `.table()`, `.wilcoxon()`, `.to_json(path)`, `.plot_km(path)`
-- `rm.viz.km_recovery_curves(...)`, `info_score_histograms(...)`, `react_by_event_type(...)`, `excess_react_distribution(...)`, `event_detail(...)`, `three_part_summary(...)`
-- `rm.datasets.load(path, mapping=...)`, `rm.datasets.load_dataset(name, ...)`
-- `rm.datasets.prepare(...)` / `create_dataset_split(...)` → on-disk partition files
-- `rm.datasets.mappings.eindhoven|tracks|ethucy`, `rm.datasets.specify_mapping(...)`
-- `rm.datasets.DatasetMapping.from_yaml(...)` / `.to_yaml(...)`
-- `rm.datasets.load_eindhoven_sample()`, `load_eindhoven(...)`, `download_eindhoven(...)`
-- `rm.datasets.synthetic_regime_changes(...)`, `load_eth_ucy(...)`, `load_tracks(path=...)`, `prepare_tracks(...)`
+```bash
+reactmetric evaluate --data tracks.parquet --forecasts preds.parquet \
+    --info 3 4.2 6 --leads 5 10 --distortions 0.1 --out summary.json --records records.csv
+```
