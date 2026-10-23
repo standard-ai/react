@@ -1,14 +1,10 @@
-"""ri.classify_lazy (experiments/react_information.py): the lazily tested outcome equals the
+"""ri.classify_lazy (reactmetric.information.outcomes): the lazily tested outcome equals the
 full-window rule with the onset window, recovery search and relapse window, and tests fewer frames."""
-
-import os
-import sys
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "experiments"))
-import react_information as ri  # noqa: E402
+from reactmetric import information as ri
 
 LOG_K = 1.0
 

@@ -37,8 +37,8 @@ warnings.filterwarnings("ignore")
 
 import exp10_information_react as e10  # noqa: E402
 import numpy as np  # noqa: E402
-import react_information as ri  # noqa: E402
 
+from reactmetric import information as ri  # noqa: E402
 from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
 from reactmetric.metric.survival import kaplan_meier, km_median  # noqa: E402
 
@@ -95,7 +95,7 @@ def work(args):
         # whitened variance of the measurement-noise floor sigma^2 I (as in exp10)
         sn_fr = sig2 * 0.5 * np.trace(np.linalg.inv(S_r), axis1=1, axis2=2)
         scale = np.exp(ri.mixture_entropy(wts, mus, covs, nodes, gw) - ri.gaussian_entropy(S_r))
-        ref_lp = ri.mixture_logpdf(y[:, None], ri._mix_prep(wts, mus, covs))[:, 0]
+        ref_lp = ri.mixture_logpdf(y[:, None], ri.mixture_prep(wts, mus, covs))[:, 0]
         mfr = {m: e10.model_frames(models[m].predict(traj), T, lead, ref) for m in names}
         for k_ev, ev in enumerate(events):
             nxt = events[k_ev + 1].t0 if k_ev + 1 < len(events) else np.inf
@@ -109,9 +109,9 @@ def work(args):
             ct = c * scale[sel]
             sn_t = sn_fr[sel]
             va = ri.knowable_share(ct, sn_t)[:, None, None]
-            mf_, vf_, _, _ = ri.truth_posterior_het(fw, ww, rho_a, rho_b, ct, sn_t)
+            mf_, vf_, _, _ = ri.truth_posterior(fw, ww, rho_a, rho_b, ct, sn_t)
             pmu, pC = ri.to_world(mf_, vf_, mrw, Srw)
-            tests = ri.RegimeTestsExact(
+            tests = ri.RegimeTests(
                 pmu, pC, mrw, va * Srw, wts[sel], mus[sel], covs[sel], c,
                 **e10.OVERLAP, table=table, geom=(speed[sel], heading[sel], anchor[sel]), sig2=sig2,
             )

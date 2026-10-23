@@ -8,7 +8,8 @@ window (t0 < t <= t0 + min(150, frames to the next evaluated event)) from the ru
     ../.venv/bin/python realized_behind.py SUMMARY_JSON RECORDS_CSV OUT_JSON
 """
 import sys, json, warnings; warnings.filterwarnings("ignore"); sys.path.insert(0, ".")
-import numpy as np, pandas as pd, exp10_information_react as e10, react_information as ri
+import numpy as np, pandas as pd, exp10_information_react as e10
+from reactmetric import information as ri
 from concurrent.futures import ProcessPoolExecutor
 from reactmetric.core.trajectory import TrajectorySet
 from reactmetric.reference import Climatology

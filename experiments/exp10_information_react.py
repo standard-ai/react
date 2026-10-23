@@ -16,7 +16,7 @@ the shipped retail-trained checkpoints are used.
 Trajectron++ (--tpp-dir, a clone of the repository; the Eindhoven run-1 checkpoint is in
 ../artifacts/trajectron/eindhoven_run1) enters twice from one network pass: "Trajectron"
 (moment-matched Gaussian) and "Trajectron_mix" (all 25 components, no pruning or merging, in the
-realized score and the tests; react_information.MixtureForecast / RegimeTestsMixture).
+realized score and the tests; reactmetric.information.MixtureForecast / RegimeTestsMixture).
 The base case, recorded as distortion 0.0 (label "clim"), has no target: the climatology's own
 spread is the bar; distortions > 0 are the REACT@d targets.
 
@@ -50,10 +50,10 @@ from itertools import repeat  # noqa: E402
 warnings.filterwarnings("ignore")
 
 import numpy as np  # noqa: E402
-import react_information as ri  # noqa: E402
 from trajectron_forecaster import add_cli_args as add_tpp_args  # noqa: E402
 
 from reactmetric import baselines  # noqa: E402
+from reactmetric import information as ri  # noqa: E402
 from reactmetric.core.predictive import Predictive  # noqa: E402
 from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
 import bayes_changepoints as bcp  # noqa: E402
@@ -510,14 +510,14 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
     Returns (records, clock).
 
     The reference enters as its real two-regime mixture (moving, stopped) through
-    regime-conditioned tests (react_information.RegimeTestsExact): given the regime, the truth
+    regime-conditioned tests (reactmetric.information.RegimeTests): given the regime, the truth
     keeps a share c of that regime's spread; the advantage is a quadratic minus the mixture's
     overlap term, evaluated per truth location, and tail probabilities are integrated on a
     polar grid. Oracle B is the forecaster equal to the inferred truth,
     N(smoothed posterior mean, c s_t S_mm,t), the most any forecast can extract at the
     assumed information level.
 
-    Only frames that can decide an event are tested (react_information.classify_lazy): onset on
+    Only frames that can decide an event are tested (reactmetric.information.classify_lazy): onset on
     the first lead + ONSET_MARGIN frames, recovery in blocks after the onset, renewed onset only
     in the RELAPSE_WINDOW frames after a recovery. The shared per-window work (truth posterior,
     RegimeTestsExact construction) still covers the whole window.
@@ -570,7 +570,7 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
             # the mixture's own entropy
             margin = {d: distortion_margin(H_cov, d) for d in dd}
             margin_H = {d: distortion_margin(H_ref, d) for d in dd}
-            ref_lp = ri.mixture_logpdf(y[:, None], ri._mix_prep(wts, mus, covs))[:, 0]
+            ref_lp = ri.mixture_logpdf(y[:, None], ri.mixture_prep(wts, mus, covs))[:, 0]
             mfr = {
                 m: model_frames(preds[m], T, lead, ref) if scored_at(specs, m, lead) else None
                 for m in specs
@@ -596,19 +596,16 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
                     ct = c * scale[sel]
                     sn_t = sn_fr[sel]
                     va = ri.knowable_share(ct, sn_t)[:, None, None]
-                    mf_, vf_, ms_, vs_ = ri.truth_posterior_het(fw, ww, rho_a, rho_b, ct, sn_t)
+                    mf_, vf_, ms_, vs_ = ri.truth_posterior(fw, ww, rho_a, rho_b, ct, sn_t)
                     pmu, pC = ri.to_world(mf_, vf_, mrw, Srw)
                     smu, sC = ri.to_world(ms_, vs_, mrw, Srw)
                     t_ = time.time()
                     targs = (pmu, pC, mrw, va * Srw, wts[sel], mus[sel], covs[sel], c)
-                    if tests_kind == "exact":
-                        tests = ri.RegimeTestsExact(
-                            *targs, **OVERLAP, table=tables[(lead, info)],
-                            geom=(speed[sel], heading[sel], anchor[sel]), sig2=sig2,
-                        )
-                        clock["off-table points"] += tests.n_off
-                    else:
-                        tests = ri.RegimeTests(*targs, sig2=sig2)
+                    tests = ri.RegimeTests(
+                        *targs, **OVERLAP, table=tables[(lead, info)],
+                        geom=(speed[sel], heading[sel], anchor[sel]), sig2=sig2,
+                    )
+                    clock["off-table points"] += tests.n_off
                     clock["tests shared"] += time.time() - t_
                     # Oracle B: the hindsight posterior predictive under the regime truth model
                     ob_mu, ob_S = ri.regime_predictive(
@@ -1127,9 +1124,9 @@ def main():
     )
     ap.add_argument(
         "--tests",
-        choices=("exact", "regime"),
+        choices=("exact",),
         default="exact",
-        help="exact: overlap term per truth location (tables); regime: averaged (old)",
+        help="exact: overlap term per truth location (tables)",
     )
     ap.add_argument(
         "--test-subset",
