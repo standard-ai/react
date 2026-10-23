@@ -54,7 +54,6 @@ from trajectron_forecaster import add_cli_args as add_tpp_args  # noqa: E402
 from reactmetric import baselines  # noqa: E402
 from reactmetric.core.predictive import MixturePredictive, Predictive  # noqa: E402
 from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
-from reactmetric.events import KinematicChangepoints  # noqa: E402
 from reactmetric.events import bayes as bcp  # noqa: E402
 from reactmetric.reference import Climatology, fit_climatology  # noqa: E402
 from reactmetric.scorer import (  # noqa: E402, F401  (re-exported for exp11, realized_behind)
@@ -145,14 +144,12 @@ def build_models(specs):
 
 
 def make_detector(spec):
-    """Event source: ("bayes-sg", hazard) tuned Bayes with Savitzky-Golay smoothing,
-    ("bayes", hazard) the earlier Bayes settings, or ("pelt", preset)."""
+    """Event source: ("bayes-sg", hazard) tuned Bayes with Savitzky-Golay smoothing (the
+    paper's), or ("bayes", hazard) the earlier Bayes settings."""
     kind, arg = spec
     if kind == "bayes-sg":
         return bcp.BayesianChangepoints.tuned_sg(hazard=arg)
-    if kind == "bayes":
-        return bcp.BayesianChangepoints(hazard=arg)
-    return KinematicChangepoints.from_preset(arg)
+    return bcp.BayesianChangepoints(hazard=arg)
 
 
 def cap_still_runs(tset, cap=WINDOW_CAP, stop_speed=0.2, window=5):
@@ -305,11 +302,11 @@ def main():
     )
     ap.add_argument(
         "--events",
-        choices=("bayes-sg", "bayes", "pelt-low"),
+        choices=("bayes-sg", "bayes"),
         default="bayes-sg",
         help="event source: tuned Bayesian changepoints on Savitzky-Golay smoothed positions "
         "(default; speed, turn, vx, vy channels, fixed tuned hazard), the earlier Bayesian "
-        "changepoints (speed and turn, empirical-Bayes hazard), or the hand-set PELT preset",
+        "changepoints (speed and turn, empirical-Bayes hazard)",
     )
     ap.add_argument(
         "--hazard",
@@ -479,8 +476,6 @@ def main():
             hazard = args.hazard
         det_spec = ("bayes", float(hazard))
         event_fit["hazard"] = float(hazard)
-    else:
-        det_spec = ("pelt", "low")
     print(f"event source: {event_fit} ({(time.time() - t_start) / 60:.1f} min)", flush=True)
     nf = str(args.noise_floor).strip()
     if nf.lower() == "none":

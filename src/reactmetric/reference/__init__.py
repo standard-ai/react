@@ -1,24 +1,19 @@
-"""Reference climatology: the information baseline REACT scores against.
+"""The climatological reference REACT scores against (paper section 3.5).
 
-`Climatology.fit(...)` is the user-facing factory; it dispatches to the global,
-kinematic, or position implementation and returns a Reference. The kinematic and
-position modes use 2D spatial structure; for other dimensions they fall back to
-the global marginal climatology automatically.
+``fit_climatology`` fits the paper's reference: the distribution of a person's position h frames
+ahead given only their most recent displacement, a speed-conditioned mixture of a moving and a
+stopped regime. ``Climatology.fit`` exposes the underlying fitter's options.
 """
 
 from __future__ import annotations
 
 import pickle
-import warnings
 from typing import Optional, Sequence
 
 import numpy as np
 
 from ..constants import DEFAULT_DT
-from .base import Reference
-from .climatology import GlobalClimatology, fit_global_climatology
 from .kinematic import KinematicClimatology, fit_kinematic_climatology
-from .position import PositionClimatology, fit_position_climatology
 
 
 class Climatology:
@@ -29,22 +24,22 @@ class Climatology:
         data,
         leads: Sequence[int],
         mode: str = "kinematic",
-        k: int = 4,
         dt: Optional[float] = None,
         seed: int = 0,
         calib_ids: Optional[Sequence[object]] = None,
         **mode_kwargs,
-    ) -> Reference:
-        """Fit a reference on a calibration TrajectorySet (or id->array mapping).
+    ) -> KinematicClimatology:
+        """Fit the kinematic climatology on a calibration TrajectorySet (or id -> array).
 
         Args:
-            data: TrajectorySet or dict[id -> (T, D) array].
+            data: TrajectorySet or dict[id -> (T, 2) array].
             leads: forecast leads to fit references for.
-            mode: 'kinematic' | 'global' | 'position'.
-            k: GMM components for the global/position mixtures.
+            mode: 'kinematic' (the only mode; kept for compatibility).
             dt: frame interval; inferred from a TrajectorySet if omitted.
-            mode_kwargs: forwarded to the mode-specific fitter.
+            mode_kwargs: forwarded to fit_kinematic_climatology.
         """
+        if mode != "kinematic":
+            raise ValueError(f"unknown reference mode {mode!r}; REACT uses 'kinematic'")
         if hasattr(data, "as_arrays"):
             arrays = data.as_arrays()
             dt = dt if dt is not None else data.dt
@@ -53,24 +48,9 @@ class Climatology:
             dt = dt if dt is not None else DEFAULT_DT
         ids = list(calib_ids) if calib_ids is not None else list(arrays.keys())
         dim = next(iter(arrays.values())).shape[1]
-
-        if mode in ("kinematic", "position") and dim != 2:
-            warnings.warn(
-                f"reference mode '{mode}' requires 2D positions (got D={dim}); "
-                f"falling back to 'global'.",
-                stacklevel=2,
-            )
-            mode = "global"
-
-        if mode == "global":
-            return fit_global_climatology(arrays, ids, leads, dt=dt, k=k, seed=seed)
-        if mode == "kinematic":
-            return fit_kinematic_climatology(arrays, ids, leads, dt=dt, seed=seed, **mode_kwargs)
-        if mode == "position":
-            return fit_position_climatology(
-                arrays, ids, leads, dt=dt, k=k, seed=seed, **mode_kwargs
-            )
-        raise ValueError(f"unknown reference mode '{mode}'")
+        if dim != 2:
+            raise ValueError(f"the kinematic climatology needs 2D positions (got D={dim})")
+        return fit_kinematic_climatology(arrays, ids, leads, dt=dt, seed=seed, **mode_kwargs)
 
 
 def fit_climatology(
@@ -105,26 +85,21 @@ def fit_climatology(
     return ref
 
 
-def save(reference: Reference, path: str) -> None:
+def save(reference: KinematicClimatology, path: str) -> None:
     with open(path, "wb") as f:
         pickle.dump(reference, f)
 
 
-def load(path: str) -> Reference:
+def load(path: str) -> KinematicClimatology:
     with open(path, "rb") as f:
         return pickle.load(f)
 
 
 __all__ = [
-    "Reference",
     "Climatology",
-    "GlobalClimatology",
     "KinematicClimatology",
-    "PositionClimatology",
     "fit_climatology",
-    "fit_global_climatology",
     "fit_kinematic_climatology",
-    "fit_position_climatology",
     "save",
     "load",
 ]

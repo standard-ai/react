@@ -1,5 +1,3 @@
-import warnings
-
 import numpy as np
 import pytest
 
@@ -48,23 +46,3 @@ def test_forecasts_npz_roundtrip(tmp_path):
     assert "7" in loaded
     np.testing.assert_array_equal(loaded["7"].means, means)
 
-
-def test_calibration_report_flags_overconfidence(synthetic):
-    bad = rm.baselines.ConstantVelocity(measurement_noise=0.002, name="Bad")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        rep = rm.calibration.report(bad, synthetic["data"], synthetic["ref"],
-                                    synthetic["events"], lead=10, emit_warning=False)
-    assert rep.coverage_chi2 > 2  # overconfident in 2D
-    assert not rep.is_calibrated
-    assert any("OVERCONFIDENT" in w for w in rep.warnings)
-
-
-def test_counterfactual_is_labeled_hypothetical(synthetic):
-    bad = rm.baselines.ConstantVelocity(measurement_noise=0.002, name="Bad")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        cf = rm.calibration.counterfactual_react(bad, synthetic["test"], synthetic["ref"],
-                                                  synthetic["events"], lead=10)
-    assert cf.temperature > 1.0
-    assert "HYPOTHETICAL" in cf.summary()

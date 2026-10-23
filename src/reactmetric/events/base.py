@@ -1,7 +1,7 @@
 """Event model and the EventSource protocol.
 
 An Event is one regime change ("commitment event") on one trajectory at frame
-``t0``. The default source is the kinematic changepoint detector, but any object
+``t0``. The default source is the Bayesian changepoint detector, but any object
 implementing EventSource -- including a bring-your-own timestamp adapter or a
 ruptures plugin -- can supply events to REACT.
 """
@@ -13,7 +13,6 @@ from typing import Dict, List, Protocol, runtime_checkable
 
 import numpy as np
 
-from ..constants import DEFAULT_DT
 from ..core.trajectory import Trajectory, TrajectorySet
 
 
@@ -38,11 +37,7 @@ class Event:
     d_heading_level: float = 0.0
     d_speed_level: float = 0.0
 
-    detection_floor_frames: float = float("inf")
     t0_std: float = float("nan")
-
-    def floor_seconds(self, dt: float = DEFAULT_DT) -> float:
-        return self.detection_floor_frames * dt
 
 
 @runtime_checkable

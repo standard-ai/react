@@ -81,3 +81,40 @@ def test_one_component_mixture_scores_like_its_gaussian(scorer):
     b = scorer.evaluate({"m": mix}, test).records
     key = ("model", "track", "t0", "distortion", "status", "onset", "react", "relapse3")
     assert [tuple(r[k] for k in key) for r in a] == [tuple(r[k] for k in key) for r in b]
+
+
+def test_benchmark_adds_baselines_and_serializes(scorer, tmp_path):
+    import json
+
+    import reactmetric as rm
+
+    calib, test = _tracks(10, seed=6), _tracks(2, seed=7)
+    cv = baselines.ConstantVelocity()
+    mine = {t: cv.predict(test[t]) for t in test.ids}
+    result = rm.benchmark({"Mine": mine}, test, calib, baselines=["ConstantVelocity", "CTRV"],
+                          scorer=scorer)
+    assert {r["model"] for r in result.records} == {"Mine", "ConstantVelocity", "CTRV",
+                                                    "oracle_B"}
+    result.to_json(tmp_path / "r.json")
+    payload = json.load(open(tmp_path / "r.json"))
+    assert payload["settings"]["info_levels"] == {"5": [4.2]}
+    assert any(row["model"] == "Mine" for row in payload["summary"])
+    result.to_csv(tmp_path / "r.csv")
+    assert (tmp_path / "r.csv").read_text().startswith("lead,info,distortion")
+    with pytest.raises(ValueError, match="clash"):
+        rm.benchmark({"CTRV": mine}, test, calib, baselines=["CTRV"], scorer=scorer)
+
+
+def test_plots(scorer, tmp_path):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from reactmetric.viz import km_curves, outcome_profile, react_label
+
+    result = scorer.evaluate({"CV": baselines.ConstantVelocity()}, _tracks(2, seed=8))
+    km_curves(result, lead=5, info=4.2, save=str(tmp_path / "km.png"))
+    km_curves(result, lead=5, info=4.2, given_onset=False)
+    outcome_profile(result, lead=5, info=4.2, save=str(tmp_path / "bars.png"))
+    assert (tmp_path / "km.png").exists() and (tmp_path / "bars.png").exists()
+    assert react_label(10, 0.1, 4.2) == "REACT(10, 0.1 m; 4.2)"

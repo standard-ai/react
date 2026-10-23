@@ -23,7 +23,9 @@ RTOL = 1e-9
 
 
 def close(a, b):
-    if isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+    numbers = (int, float)
+    if isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, numbers) \
+            or not isinstance(b, numbers):
         return a == b
     if math.isnan(a) and math.isnan(b):
         return True
@@ -54,7 +56,8 @@ def main(new_dir, ref_records, ref_summary):
     ref = pd.read_csv(ref_records)
     ref = ref[ref["track"].isin(set(new["track"]))]
     new, ref = (d.sort_values(KEY).reset_index(drop=True) for d in (new, ref))
-    print(f"records: {len(new)} rows on {new['track'].nunique()} tracks; reference has {len(ref)} rows for them")
+    print(f"records: {len(new)} rows on {new['track'].nunique()} tracks; "
+          f"reference has {len(ref)} rows for them")
     if list(new.columns) != list(ref.columns):
         failures.append(f"columns differ: {set(new.columns) ^ set(ref.columns)}")
     elif len(new) != len(ref):

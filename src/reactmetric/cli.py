@@ -3,8 +3,8 @@
 Runs the one-call benchmark from files:
 
     reactmetric evaluate --data tracks.parquet --forecasts my_preds.parquet \\
-        --calibration-fraction 0.2 --lead 10 --baselines CTRV IMM --oracle B \\
-        --reference-mode kinematic --out react_results.json --plots out/
+        --info 3 4.2 6 --leads 5 10 --distortions 0.1 --baselines ConstantVelocity IMM \\
+        --out react_results.json --records react_records.csv --plots out/
 """
 
 from __future__ import annotations
@@ -53,16 +53,17 @@ def main(argv=None) -> int:
     ev.add_argument("--lead-col", default="lead")
     ev.add_argument("--mean-cols", nargs="+", default=["mu_x", "mu_y"])
     ev.add_argument("--cov-cols", nargs="+", default=["sigma_x", "sigma_y", "rho"])
-    ev.add_argument("--calibration-fraction", type=float, default=0.2)
+    ev.add_argument("--calibration-fraction", type=float, default=0.3)
     ev.add_argument("--seed", type=int, default=0)
-    ev.add_argument("--lead", type=int, default=10)
-    ev.add_argument("--epsilon", type=float, default=0.0)
-    ev.add_argument("--reference-mode", default="kinematic",
-                    choices=["kinematic", "global", "position"])
-    ev.add_argument("--scoring", default="nll", choices=["nll", "crps", "energy"])
-    ev.add_argument("--baselines", nargs="*", default=[])
-    ev.add_argument("--oracle", default=None, choices=[None, "B", "C"])
-    ev.add_argument("--out", default="react_results.json")
+    ev.add_argument("--info", type=float, nargs="+", default=[3.0, 4.2, 6.0],
+                    help="assumed information levels I_traj (nats)")
+    ev.add_argument("--leads", type=int, nargs="+", default=[1, 5, 10, 15])
+    ev.add_argument("--distortions", type=float, nargs="*", default=[0.1, 0.3],
+                    help="target distances d (m); d = infinity is always included")
+    ev.add_argument("--baselines", nargs="*", default=["ConstantVelocity", "CTRV", "IMM"])
+    ev.add_argument("--jobs", type=int, default=1)
+    ev.add_argument("--out", default="react_results.json", help="summary JSON")
+    ev.add_argument("--records", default=None, help="per-event records CSV")
     ev.add_argument("--plots", default=None, help="directory to write plots")
 
     args = parser.parse_args(argv)
@@ -74,20 +75,22 @@ def main(argv=None) -> int:
         forecasts = _load_forecasts(args.forecasts, args)
         calib, test = data.split(fraction=args.calibration_fraction, seed=args.seed)
 
-        report = benchmark(
-            forecasts={"model": forecasts}, data=test, calibration=calib,
-            baselines=args.baselines, oracle=args.oracle, reference_mode=args.reference_mode,
-            lead=args.lead, epsilon=args.epsilon, scoring=args.scoring,
+        result = benchmark(
+            {"model": forecasts}, test, calib, baselines=args.baselines, info=args.info,
+            leads=args.leads, distortions=args.distortions, n_jobs=args.jobs, seed=args.seed,
         )
-        report.to_json(args.out)
+        result.to_json(args.out)
         print(f"Wrote {args.out}")
-        try:
-            print(report.table())
-        except Exception:
-            pass
+        if args.records:
+            result.to_csv(args.records)
+            print(f"Wrote {args.records}")
         if args.plots:
+            from .viz import km_curves
+
             os.makedirs(args.plots, exist_ok=True)
-            report.plot_km(os.path.join(args.plots, "km.png"))
+            for lead in args.leads:
+                path = os.path.join(args.plots, f"km_lead{lead}.png")
+                km_curves(result, lead=lead, info=args.info[len(args.info) // 2], save=path)
             print(f"Wrote plots to {args.plots}/")
         return 0
     return 1

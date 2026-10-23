@@ -1,6 +1,6 @@
 import numpy as np
 
-from reactmetric.core import Predictive, Trajectory, TrajectorySet, collapse_nll_by_target
+from reactmetric.core import Predictive, Trajectory, TrajectorySet
 
 
 def test_trajectory_shapes():
@@ -44,10 +44,3 @@ def test_predictive_isotropic_and_nll_matrix():
     # NLL of the mean under unit isotropic 2D Gaussian = log(2*pi)
     np.testing.assert_allclose(nll[~np.isnan(nll)], np.log(2 * np.pi), rtol=1e-6)
 
-
-def test_collapse_by_target_average():
-    issue = np.arange(0, 5)
-    nll = np.tile(np.arange(1.0, 4.0), (5, 1))  # H=3, columns [1,2,3]
-    frames, vals = collapse_nll_by_target(issue, nll, lead=None)
-    # each fully-covered target frame averages [1,2,3] = 2
-    np.testing.assert_allclose(vals, 2.0)

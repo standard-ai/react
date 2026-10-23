@@ -154,14 +154,10 @@ class Predictive:
         out = np.where(valid, nll, np.nan)
         return out
 
-    def nll(self, traj, scoring: str = "nll") -> np.ndarray:
-        """Per-(issue, step) score against a Trajectory (see scoring rules)."""
+    def nll(self, traj) -> np.ndarray:
+        """Per-(issue, step) NLL against a Trajectory (or an observation array)."""
         observations = traj.positions if hasattr(traj, "positions") else np.asarray(traj)
-        if scoring == "nll":
-            return self.nll_matrix(observations)
-        from ..scoring.crps import predictive_score_matrix
-
-        return predictive_score_matrix(self, observations, scoring=scoring)
+        return self.nll_matrix(observations)
 
 
 
@@ -244,47 +240,3 @@ class MixturePredictive(Predictive):
         peak = lp.max(-1, keepdims=True)
         ll = (peak + np.log(np.exp(lp - peak).sum(-1, keepdims=True)))[..., 0]
         return np.where(valid, -ll, np.nan)
-
-def collapse_nll_by_target(
-    issue_frames: np.ndarray,
-    nll: np.ndarray,
-    lead: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Collapse a per-(issue, step) NLL matrix to a target-frame trace.
-
-    With ``lead=None``, trace[f] averages over all leads predicting frame f
-    (defined only where all H leads exist, so the statistic is identically
-    distributed across frames). With an integer lead h, trace[f] is the NLL of
-    the h-step-ahead forecast of frame f (issued at f - h + 1).
-
-    Target-frame indexing means a maneuver at t0 elevates the trace at t0, not H
-    frames before any evidence exists.
-    """
-    n, hh = nll.shape
-    if n == 0:
-        return np.array([], dtype=int), np.array([])
-    issue = np.asarray(issue_frames, dtype=int)
-    first, last = int(issue[0]), int(issue[-1])
-
-    if lead is not None:
-        h = int(lead)
-        if not 1 <= h <= hh:
-            raise ValueError(f"lead {h} outside forecast horizon 1..{hh}")
-        frames = issue + (h - 1)
-        vals = nll[:, h - 1]
-        ok = ~np.isnan(vals)
-        return frames[ok], vals[ok]
-
-    candidate_frames = np.arange(first + hh - 1, last + 1)
-    if len(candidate_frames) == 0:
-        return np.array([], dtype=int), np.array([])
-    acc = np.zeros(len(candidate_frames))
-    count = np.zeros(len(candidate_frames), dtype=int)
-    for h in range(hh):
-        rows = candidate_frames - h - first
-        vals = nll[rows, h]
-        ok = ~np.isnan(vals)
-        acc[ok] += vals[ok]
-        count[ok] += 1
-    full = count == hh
-    return candidate_frames[full], acc[full] / hh

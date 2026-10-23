@@ -35,17 +35,10 @@ from typing import Dict, Sequence, Tuple
 import numpy as np
 
 from ..constants import DEFAULT_DT
-from ..scoring.nll import (
-    LOG_2PI,
-    GaussianMixtureND,
-    eps_star_from_cov,
-    gaussian_nll,
-    supported_distortion_from_cov,
-)
+from ..scoring.nll import LOG_2PI, gaussian_nll
 from .base import (
     CV_VELOCITY_WINDOW,
     MAX_FIT_SAMPLES,
-    cv_nll_trace_from_cov,
     fit_cv_residual_cov,
     regularize_cov,
 )
@@ -137,40 +130,6 @@ class KinematicClimatology:
         nll = -logp
         ok = np.isfinite(nll)
         return frames[ok].astype(int), nll[ok]
-
-    def cv_nll_trace(self, traj, lead: int) -> Tuple[np.ndarray, np.ndarray]:
-        obs = np.asarray(traj.positions if hasattr(traj, "positions") else traj, dtype=float)
-        return cv_nll_trace_from_cov(obs, lead, self.dt, self.cv_covs[lead])
-
-    def score_trace(self, traj, lead: int, scoring: str = "nll"):
-        if scoring == "nll":
-            return self.nll_trace(traj, lead)
-        from ..scoring.crps import gaussian_score
-
-        obs = np.asarray(traj.positions if hasattr(traj, "positions") else traj, dtype=float)
-        t = len(obs)
-        w = self.velocity_window
-        if lead not in self.speed_grid or t <= lead + w:
-            return np.array([], dtype=int), np.array([])
-        frames = np.arange(lead + w, t)
-        anchors = frames - lead
-        vel = (obs[anchors] - obs[anchors - w]) / (w * self.dt)
-        speed = np.hypot(vel[:, 0], vel[:, 1])
-        heading = np.arctan2(vel[:, 1], vel[:, 0])
-        mu_b, cov_b = self._predict_moving(lead, speed)
-        c, s = np.cos(heading), np.sin(heading)
-        rot = np.zeros((len(frames), 2, 2))
-        rot[:, 0, 0] = c
-        rot[:, 0, 1] = -s
-        rot[:, 1, 0] = s
-        rot[:, 1, 1] = c
-        mu_world = np.einsum("nij,nj->ni", rot, mu_b)
-        cov_world = np.einsum("nij,njk,nlk->nil", rot, cov_b, rot)
-        mu_abs = obs[anchors] + mu_world
-        resid = obs[frames] - mu_abs
-        score = gaussian_score(resid, cov_world, scoring)
-        ok = np.isfinite(score)
-        return frames[ok].astype(int), score[ok]
 
     def conditional_gaussian(
         self, lead: int, speed: float, heading: float
@@ -281,24 +240,6 @@ class KinematicClimatology:
         far = np.abs(mu_b).max(1) + reach * np.sqrt(np.linalg.eigvalsh(cov_b)[:, 1])
         c = core * sd_stop
         return v, c, step * sd_stop, growth, max(float(far.max()), 2.0 * c)
-
-    def displacement_prior(self, lead: int, speed: float, heading: float) -> GaussianMixtureND:
-        mu_w, cov_w = self.conditional_gaussian(lead, float(speed), float(heading))
-        lam = float(self.move_weight(lead, float(speed)))
-        eps = 1e-12
-        weights = np.array([lam + eps, 1.0 - lam + eps])
-        means = np.vstack([mu_w, np.zeros(2)])
-        covs = np.stack([cov_w, self.stop_cov[lead]])
-        return GaussianMixtureND(weights=weights, means=means, covs=covs)
-
-    def cv_residual_cov(self, lead: int) -> np.ndarray:
-        return self.cv_covs.get(lead, np.zeros((2, 2)))
-
-    def eps_star(self, lead: int, d_meters: float) -> float:
-        return eps_star_from_cov(self.marginal_cov[lead], d_meters)
-
-    def supported_distortion(self, lead: int) -> float:
-        return supported_distortion_from_cov(self.marginal_cov[lead])
 
     def metadata(self) -> Dict:
         out = {

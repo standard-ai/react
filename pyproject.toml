@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "reactmetric"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "REACT (Regime Event Adaptive Correction Time): a metric for how quickly trajectory forecasts recover usefulness after disruptive events."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,7 +27,6 @@ classifiers = [
 dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
-    "scikit-learn>=1.0",
 ]
 
 [project.optional-dependencies]

@@ -897,6 +897,57 @@ class ReactResult:
         """select_info_level on this result's summary."""
         return select_info_level(self.summary(), distortion, threshold)
 
+    def settings(self) -> Dict:
+        """The assumptions every number in this result carries."""
+        sc = self.scorer
+        if sc is None:
+            return {}
+        return {
+            "leads": list(sc.leads),
+            "info_levels": {str(k): [lv.info for lv in v] for k, v in sc.levels.items()},
+            "distortions_m": [None, *sc.distortions],
+            "decision_probability": sc.p,
+            "noise_floor": sc.noise_floor,
+            "onset_window": f"lead + {ONSET_MARGIN} frames",
+            "window_cap_frames": WINDOW_CAP,
+            "min_window_frames": MIN_WINDOW,
+        }
+
+    def to_json(self, path: str) -> None:
+        """Summary and settings as JSON (NaN written as null)."""
+        import json
+
+        def clean(v):
+            if isinstance(v, float) and not np.isfinite(v):
+                return None
+            if isinstance(v, (np.floating, np.integer)):
+                return clean(v.item())
+            if isinstance(v, dict):
+                return {str(k): clean(x) for k, x in v.items()}
+            if isinstance(v, (list, tuple)):
+                return [clean(x) for x in v]
+            return v
+
+        rows = [{"lead": k[0], "info": k[1], "distortion": k[2], "model": k[3], **v}
+                for k, v in self.summary().items()]
+        payload = {"schema": "reactmetric/0.2", "settings": self.settings(), "summary": rows}
+        if self.scorer is not None:
+            payload["calibration"] = {str(k): v for k, v in self.scorer.calibration.items()}
+        with open(path, "w") as f:
+            json.dump(clean(payload), f, indent=1)
+
+    def to_csv(self, path: str) -> None:
+        """Per-event records as CSV."""
+        import csv
+
+        if not self.records:
+            open(path, "w").close()
+            return
+        with open(path, "w", newline="") as f:
+            wr = csv.DictWriter(f, fieldnames=list(self.records[0].keys()))
+            wr.writeheader()
+            wr.writerows(self.records)
+
     def to_dataframe(self):
         import pandas as pd
 

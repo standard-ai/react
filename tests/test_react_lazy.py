@@ -1,5 +1,6 @@
 """ri.classify_lazy (reactmetric.information.outcomes): the lazily tested outcome equals the
-full-window rule with the onset window, recovery search and relapse window, and tests fewer frames."""
+full-window rule with the onset window, recovery search and relapse window, and tests fewer
+frames."""
 
 import numpy as np
 import pytest
@@ -72,7 +73,8 @@ def test_classify_lazy_oracle_first_ahead_and_frames_tested():
 
     def evaluate(idx, chs, need_on):
         calls.append((len(idx), tuple(chs)))
-        return {"rec": d_rec[chs][:, idx], "lbf_rec": d_rec[chs][:, idx], "mean_I": np.zeros(len(idx)),
+        return {"rec": d_rec[chs][:, idx], "lbf_rec": d_rec[chs][:, idx],
+                "mean_I": np.zeros(len(idx)),
                 "on": np.zeros(len(idx)), "lbf_on": np.zeros(len(idx))}
 
     _, fa, st = ri.classify_lazy(evaluate, frames, t0, LOG_K, 2, 10, oracle=True)

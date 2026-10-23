@@ -1,8 +1,8 @@
 """Bayesian changepoint detection: REACT's default event source (paper section 3.4).
 
-Offline Bayesian changepoint model (Fearnhead 2006) on the same features as
-KinematicChangepoints (speed and turn rate from the velocity window), reusing its event-type
-classification; only the segmentation step differs. The paper's detector is
+Offline Bayesian changepoint model (Fearnhead 2006) on the kinematic features of
+KinematicFeatures (speed and turn rate from the velocity window), with its event-type
+classification. The paper's detector is
 ``BayesianChangepoints.tuned_sg()``: Savitzky-Golay smoothed positions, speed, turn rate and the
 two velocity components as channels, the tuned fixed hazard, and event types relabelled from the
 headings before and after (stop, start, speed change, turn, both).
@@ -34,7 +34,7 @@ import numpy as np
 from scipy.signal import savgol_filter
 from scipy.special import gammaln, logsumexp
 
-from .kinematic import KinematicChangepoints, segmentation_config
+from .kinematic import KinematicFeatures, SegmentationConfig
 
 DEFAULT_HAZARD = 1e-2
 # Tuned on the grounded synthetic tracks with known changes (validation split; held-out F1 0.643
@@ -49,15 +49,15 @@ def _robust_sd(x):
     return 1.4826 * np.median(np.abs(x - np.median(x)))
 
 
-class BayesianChangepoints(KinematicChangepoints):
+class BayesianChangepoints(KinematicFeatures):
     """Event source: offline Bayesian changepoints on speed and turn rate."""
 
     def __init__(self, hazard=DEFAULT_HAZARD, min_size=50, kappa0=1.0, nu0=1.0, threshold=0.5,
-                 delta=5, base_preset="low", velocity_window=None, temper=None,
+                 delta=5, velocity_window=None, temper=None,
                  velocity_channels=False, smooth_window=0, smooth_polyorder=2,
                  relabel_heading=False):
         over = {} if velocity_window is None else {"velocity_window": int(velocity_window)}
-        super().__init__(segmentation_config(base_preset, min_size=min_size, **over))
+        super().__init__(SegmentationConfig(min_size=min_size, **over))
         self.hazard, self.kappa0, self.nu0 = float(hazard), float(kappa0), float(nu0)
         self.threshold, self.delta = float(threshold), int(delta)
         # `temper` (frames): n frames count as n / temper observations. None: the velocity window
