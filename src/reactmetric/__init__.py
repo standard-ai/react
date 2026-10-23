@@ -100,6 +100,14 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:  # REACT as published (TGF 2026); supersedes evaluate/benchmark below
+    from . import information, scorer  # noqa: F401
+    from .scorer import ReactScorer  # noqa: F401
+
+    __all__ += ["ReactScorer", "information", "scorer"]
+except Exception:  # pragma: no cover
+    pass
+
 try:
     from . import viz  # noqa: F401
 
