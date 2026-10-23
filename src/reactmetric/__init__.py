@@ -23,7 +23,13 @@ from __future__ import annotations
 from . import baselines, constants, datasets, events, forecasters, reference, scoring
 from .config import ReactConfig
 from .constants import react_at_lead
-from .core import Predictive, Trajectory, TrajectorySet, collapse_nll_by_target
+from .core import (
+    MixturePredictive,
+    Predictive,
+    Trajectory,
+    TrajectorySet,
+    collapse_nll_by_target,
+)
 from .io import Forecasts
 from .metric import (
     EventMeasurement,
@@ -39,6 +45,7 @@ __all__ = [
     "Trajectory",
     "TrajectorySet",
     "Predictive",
+    "MixturePredictive",
     "Forecasts",
     "collapse_nll_by_target",
     "ReactConfig",

@@ -5,10 +5,9 @@ predictive distribution of the position at frame ``issue_frames[i] + h`` (lead
 h+1, h = 0..H-1). This is the ND generalization of the internal TrackForecasts.
 
 `gaussian` is the direct port (you supply means + covariances). `isotropic` is a
-diagonal shortcut. `from_samples` is the new ingestion path for ensemble /
-multimodal / K-sampled-trajectory forecasters: samples are converted to a
-Gaussian predictive (moment matching, optionally KDE-smoothed) so they ride the
-same fast log-score path as everything else.
+diagonal shortcut. `MixturePredictive` holds Gaussian-mixture forecasts, which REACT
+scores natively. `from_samples` moment-matches K sampled trajectories to one Gaussian;
+for a multimodal forecaster that collapse is costly, so pass its mixture instead.
 """
 
 from __future__ import annotations
@@ -164,6 +163,87 @@ class Predictive:
 
         return predictive_score_matrix(self, observations, scoring=scoring)
 
+
+
+class MixturePredictive(Predictive):
+    """Gaussian-mixture predictive distributions for one track (e.g. Trajectron++'s 25 modes).
+
+    weights (n, J) or (n, H, J) (normalized per issue frame; mode weights shared across the
+    horizon when 2D), means (n, H, J, D), covs (n, H, J, D, D). REACT scores the mixture
+    itself (paper section 3.2); collapsing it to one Gaussian costs 0.4-0.8 nats per frame on
+    pedestrian data. The inherited ``means`` / ``covs`` / ``at_lead`` are the mixture's exact
+    moment-matched Gaussian, for consumers that need one.
+    """
+
+    __slots__ = ("weights", "component_means", "component_covs")
+
+    def __init__(
+        self,
+        issue_frames: np.ndarray,
+        weights: np.ndarray,
+        means: np.ndarray,
+        covs: np.ndarray,
+        horizon: Optional[int] = None,
+    ):
+        w = np.asarray(weights, dtype=float)
+        mu = np.asarray(means, dtype=float)
+        cv = np.asarray(covs, dtype=float)
+        if mu.ndim != 4 or cv.ndim != 5:
+            raise ValueError(
+                f"means must be (n, H, J, D) and covs (n, H, J, D, D); got {mu.shape}, {cv.shape}"
+            )
+        if w.shape not in (mu.shape[:1] + mu.shape[2:3], mu.shape[:3]):
+            raise ValueError(f"weights must be (n, J) or (n, H, J); got {w.shape}")
+        # moment matching through log weights, as the Trajectron++ adapter of the paper run did
+        lw = np.exp(np.log(np.clip(w, 1e-300, None)))
+        lw = lw / lw.sum(-1, keepdims=True)
+        if lw.ndim == 2:
+            mean = np.einsum("bk,bhkd->bhd", lw, mu)
+            diff = mu - mean[:, :, None, :]
+            cov = np.einsum("bk,bhkij->bhij", lw, cv) + np.einsum(
+                "bk,bhki,bhkj->bhij", lw, diff, diff
+            )
+        else:
+            mean = np.einsum("bhk,bhkd->bhd", lw, mu)
+            diff = mu - mean[:, :, None, :]
+            cov = np.einsum("bhk,bhkij->bhij", lw, cv) + np.einsum(
+                "bhk,bhki,bhkj->bhij", lw, diff, diff
+            )
+        super().__init__(issue_frames, mean, 0.5 * (cov + np.swapaxes(cov, -1, -2)), horizon)
+        self.weights, self.component_means, self.component_covs = w, mu, cv
+
+    def mixture_at_lead(self, lead: int):
+        """(target_frames, weights (n, J), means (n, J, D), covs (n, J, D, D)) at one lead."""
+        h = int(lead)
+        if not 1 <= h <= self.horizon:
+            raise ValueError(f"lead {h} outside horizon 1..{self.horizon}")
+        w = self.weights if self.weights.ndim == 2 else self.weights[:, h - 1]
+        return (self.issue_frames + (h - 1), w, self.component_means[:, h - 1],
+                self.component_covs[:, h - 1])
+
+    @property
+    def mix(self):
+        """The raw arrays as a dict (issue_frames, weights, means, covs)."""
+        return {"issue_frames": self.issue_frames, "weights": self.weights,
+                "means": self.component_means, "covs": self.component_covs}
+
+    def nll_matrix(self, observations: np.ndarray) -> np.ndarray:
+        """Per-(issue, step) mixture NLL of the realized observations, (n, H); NaN past the
+        track's end."""
+        observations = np.asarray(observations, dtype=float)
+        n, hh, J, dim = self.component_means.shape
+        t = len(observations)
+        targets = self.issue_frames[:, None] + np.arange(hh)[None, :]
+        valid = targets < t
+        y = observations[np.minimum(targets, t - 1)]                     # (n, H, D)
+        diff = (y[:, :, None, :] - self.component_means).reshape(-1, dim)
+        comp = -gaussian_nll(diff, self.component_covs.reshape(-1, dim, dim)).reshape(n, hh, J)
+        w = self.weights if self.weights.ndim == 3 else self.weights[:, None, :]
+        w = w / w.sum(-1, keepdims=True)
+        lp = comp + np.log(np.clip(w, 1e-300, None))
+        peak = lp.max(-1, keepdims=True)
+        ll = (peak + np.log(np.exp(lp - peak).sum(-1, keepdims=True)))[..., 0]
+        return np.where(valid, -ll, np.nan)
 
 def collapse_nll_by_target(
     issue_frames: np.ndarray,

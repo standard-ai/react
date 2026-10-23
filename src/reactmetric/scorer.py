@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Uni
 import numpy as np
 
 from . import information as ri
+from .core.predictive import MixturePredictive
 from .metric.survival import kaplan_meier, km_median
 from .reference import fit_climatology
 
@@ -80,17 +81,15 @@ def model_frames(pred, T, lead, ref):
 
 
 def mixture_frames(pred, T, lead, ref):
-    """The full mixture of a mixture forecast over the frames model_frames keeps (same mask
+    """The full mixture of a MixturePredictive over the frames model_frames keeps (same mask
     and order), or None for a Gaussian forecast."""
-    mix = getattr(pred, "mix", None)
-    if mix is None:
+    if not isinstance(pred, MixturePredictive):
         return None
-    target = mix["issue_frames"] + (lead - 1)
+    target, w, mu, cov = pred.mixture_at_lead(lead)
     ok = (target < T) & (target - lead - int(getattr(ref, "velocity_window", 5)) >= 0)
     if ok.sum() < MIN_FRAMES:
         return None
-    w, mu, cov = mix["weights"][ok], mix["means"][ok, lead - 1], mix["covs"][ok, lead - 1]
-    return ri.MixtureForecast(w, mu, cov)
+    return ri.MixtureForecast(w[ok], mu[ok], cov[ok])
 
 
 def whiten(y, mu, S):

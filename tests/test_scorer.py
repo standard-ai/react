@@ -64,3 +64,20 @@ def test_precomputed_forecasts_match_a_forecaster(scorer):
     a = scorer.evaluate({"CV": cv}, test).records
     b = scorer.evaluate({"CV": {t: cv.predict(test[t]) for t in test.ids}}, test).records
     assert a == b
+
+
+def test_one_component_mixture_scores_like_its_gaussian(scorer):
+    from reactmetric.core.predictive import MixturePredictive
+
+    test = _tracks(2, seed=5)
+    cv = baselines.ConstantVelocity()
+    gauss, mix = {}, {}
+    for t in test.ids:
+        p = cv.predict(test[t])
+        gauss[t] = p
+        mix[t] = MixturePredictive(p.issue_frames, np.ones((len(p), 1)), p.means[:, :, None],
+                                   p.covs[:, :, None])
+    a = scorer.evaluate({"m": gauss}, test).records
+    b = scorer.evaluate({"m": mix}, test).records
+    key = ("model", "track", "t0", "distortion", "status", "onset", "react", "relapse3")
+    assert [tuple(r[k] for k in key) for r in a] == [tuple(r[k] for k in key) for r in b]

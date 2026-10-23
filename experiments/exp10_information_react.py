@@ -52,7 +52,7 @@ import numpy as np  # noqa: E402
 from trajectron_forecaster import add_cli_args as add_tpp_args  # noqa: E402
 
 from reactmetric import baselines  # noqa: E402
-from reactmetric.core.predictive import Predictive  # noqa: E402
+from reactmetric.core.predictive import MixturePredictive, Predictive  # noqa: E402
 from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
 from reactmetric.events import KinematicChangepoints  # noqa: E402
 from reactmetric.events import bayes as bcp  # noqa: E402
@@ -100,18 +100,6 @@ DISTORTIONS = (0.1, 0.2, 0.3)
 # ---------------------------------------------------------------------------
 
 
-class MixturePredictive(Predictive):
-    """Moment-matched Gaussian forecast that also keeps the network's full mixture (raw arrays)."""
-
-    def __init__(self, mix, horizon):
-        from trajectron_forecaster import TrajectronForecaster
-
-        lp = np.log(np.clip(mix["weights"], 1e-300, None))
-        mu, cov = TrajectronForecaster.collapse(lp, mix["means"], mix["covs"])
-        super().__init__(mix["issue_frames"], mu, cov, horizon)
-        self.mix = mix
-
-
 class Trajectron:
     """One network pass per track, shared by the moment-matched ("Trajectron") and full-mixture
     ("Trajectron_mix") entries of the specs."""
@@ -124,7 +112,9 @@ class Trajectron:
     def predict(self, traj):
         if self._last[0] is not traj:
             mix = self.net.predict_mixture(traj)
-            pred = None if mix is None else MixturePredictive(mix, self.net.horizon)
+            pred = None if mix is None else MixturePredictive(
+                mix["issue_frames"], mix["weights"], mix["means"], mix["covs"], self.net.horizon
+            )
             self._last = (traj, pred)
         return self._last[1]
 
