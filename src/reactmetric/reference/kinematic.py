@@ -10,7 +10,18 @@ its conditional mean and covariance).
 
 Because speed/heading come from a causal lagging window, the reference is still
 surprised by genuine maneuvers; only trivially-predictable persistence is
-conditioned out. A separate isotropic stopped regime handles speed < stop_speed.
+conditioned out. A separate isotropic stopped regime handles people standing still.
+
+How the two regimes are weighted is set by ``stop_model``:
+
+* ``"ramp"`` (default): a hand-set linear ramp from ``stop_speed`` to
+  ``stop_speed + transition_band``, with each regime fitted on its side of the
+  threshold.
+* ``"fitted"``: the probability of the moving regime is a smooth function of speed
+  estimated from data, jointly with both regimes, by EM (a mixture of experts with
+  kernel-smoothed M-steps over the speed grid). A person who looks stopped but
+  starts moving within the lead is then accounted for at the rate it happens in the
+  calibration data, instead of by where a threshold happens to sit.
 
 Heading is a 2D notion, so this mode requires D == 2; the facade falls back to the
 global climatology for other dimensions.
@@ -67,6 +78,16 @@ class KinematicClimatology:
     cv_covs: Dict[int, np.ndarray]
     n_samples: Dict[int, int] = field(default_factory=dict)
     n_calib_tracks: int = 0
+    stop_model: str = "ramp"
+    move_weight_grid: Dict[int, np.ndarray] = field(default_factory=dict)
+    em_loglik: Dict[int, list] = field(default_factory=dict)
+
+    def move_weight(self, lead: int, speed) -> np.ndarray:
+        """Probability of the moving regime at this causal speed."""
+        speed = np.asarray(speed, dtype=float)
+        if self.stop_model == "fitted":
+            return np.interp(speed, self.speed_grid[lead], self.move_weight_grid[lead])
+        return np.clip((speed - self.stop_speed) / max(self.transition_band, 1e-9), 0.0, 1.0)
 
     def _predict_moving(self, lead: int, speed: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         grid = self.speed_grid[lead]
@@ -104,7 +125,7 @@ class KinematicClimatology:
         mu, cov = self._predict_moving(lead, speed)
         nll_move = gaussian_nll(disp_body - mu, cov)
         nll_stop = gaussian_nll(disp, self.stop_cov[lead])
-        lam = np.clip((speed - self.stop_speed) / max(self.transition_band, 1e-9), 0.0, 1.0)
+        lam = self.move_weight(lead, speed)
         eps = 1e-12
         logp_move = np.log(lam + eps) - nll_move
         logp_stop = np.log(1.0 - lam + eps) - nll_stop
@@ -159,9 +180,7 @@ class KinematicClimatology:
 
     def displacement_prior(self, lead: int, speed: float, heading: float) -> GaussianMixtureND:
         mu_w, cov_w = self.conditional_gaussian(lead, float(speed), float(heading))
-        lam = float(np.clip(
-            (speed - self.stop_speed) / max(self.transition_band, 1e-9), 0.0, 1.0
-        ))
+        lam = float(self.move_weight(lead, float(speed)))
         eps = 1e-12
         weights = np.array([lam + eps, 1.0 - lam + eps])
         means = np.vstack([mu_w, np.zeros(2)])
@@ -185,6 +204,7 @@ class KinematicClimatology:
             "stop_speed": self.stop_speed,
             "speed_kernel_bw": self.speed_kernel_bw,
             "transition_band": self.transition_band,
+            "stop_model": self.stop_model,
             "n_calib_tracks": self.n_calib_tracks,
             "leads": list(self.leads),
             "per_lead": {},
@@ -213,6 +233,8 @@ def fit_kinematic_climatology(
     n_speed_knots: int = 16,
     transition_band: float = 0.15,
     seed: int = 0,
+    stop_model: str = "ramp",
+    em_iters: int = 60,
 ) -> KinematicClimatology:
     leads_t = tuple(sorted({int(l) for l in leads}))
     w = int(velocity_window)
@@ -224,6 +246,10 @@ def fit_kinematic_climatology(
     marginal_cov: Dict[int, np.ndarray] = {}
     cv_covs: Dict[int, np.ndarray] = {}
     n_samples: Dict[int, int] = {}
+    move_weight_grid: Dict[int, np.ndarray] = {}
+    em_loglik: Dict[int, list] = {}
+    if stop_model not in ("ramp", "fitted"):
+        raise ValueError(f"stop_model must be 'ramp' or 'fitted'; got {stop_model!r}")
 
     for lead in leads_t:
         sp_chunks, body_chunks, world_chunks = [], [], []
@@ -259,6 +285,18 @@ def fit_kinematic_climatology(
             speeds, body, world = speeds[sel], body[sel], world[sel]
         if len(speeds) < 100:
             raise ValueError(f"Only {len(speeds)} kinematic samples at lead {lead}")
+
+        if stop_model == "fitted":
+            grid, mug, covg, scov, wgrid, trace = _fit_mixture_em(
+                speeds, body, world, stop_speed, transition_band, speed_kernel_bw,
+                n_speed_knots, em_iters,
+            )
+            speed_grid[lead], mu_grid[lead], cov_grid[lead] = grid, mug, covg
+            stop_cov[lead], move_weight_grid[lead], em_loglik[lead] = scov, wgrid, trace
+            marginal_cov[lead] = regularize_cov(np.cov(body.T))
+            cv_covs[lead] = fit_cv_residual_cov(arrays, calib_ids, lead, dt)
+            n_samples[lead] = int(len(speeds))
+            continue
 
         moving = speeds >= stop_speed
         stopped_world = world[~moving]
@@ -298,5 +336,140 @@ def fit_kinematic_climatology(
         speed_kernel_bw=float(speed_kernel_bw), transition_band=float(transition_band),
         speed_grid=speed_grid, mu_grid=mu_grid, cov_grid=cov_grid, stop_cov=stop_cov,
         marginal_cov=marginal_cov, cv_covs=cv_covs, n_samples=n_samples,
+        stop_model=stop_model, move_weight_grid=move_weight_grid, em_loglik=em_loglik,
         n_calib_tracks=len(list(calib_ids)),
     )
+
+
+def _fit_mixture_em(speeds, body, world, stop_speed, transition_band, bw, n_knots, iters):
+    """Best of several EM starts (mixtures have local optima; keep the highest likelihood)."""
+    starts = [(stop_speed, transition_band), (0.1, 0.1), (0.4, 0.3), (0.05, 0.6)]
+    fits = [
+        _fit_mixture_em_once(speeds, body, world, s0, b0, bw, n_knots, iters) for s0, b0 in starts
+    ]
+    return max(fits, key=lambda f: f[-1][-1])
+
+
+def _fit_mixture_em_once(speeds, body, world, stop_speed, transition_band, bw, n_knots, iters):
+    """Stopped/moving mixture of experts over speed, by EM.
+
+    p(d | s) = (1 - pi(s)) N(d_world; 0, S_stop) + pi(s) N(d_body; mu(s), S(s)).
+    E-step: responsibilities. M-step: S_stop from stopped responsibilities; mu(s),
+    S(s) and pi(s) as kernel-smoothed (bandwidth ``bw``) weighted moments on a speed
+    grid spanning all speeds, interpolated between knots. Initialised from the ramp.
+    """
+    n_knots = max(int(n_knots), 24)
+    grid = np.linspace(0.0, float(np.quantile(speeds, 0.995)), n_knots)
+    K = np.exp(-0.5 * ((speeds[None, :] - grid[:, None]) / max(bw, 1e-6)) ** 2)  # (G, N)
+    K_sum = np.maximum(K.sum(axis=1), 1e-12)
+    ramp = np.clip((speeds - stop_speed) / max(transition_band, 1e-9), 0.0, 1.0)
+    r_move = np.clip(ramp, 0.02, 0.98)
+    mug = np.zeros((n_knots, 2))
+    covg = np.zeros((n_knots, 2, 2))
+    trace = []
+
+    def interp(values):
+        return np.stack([np.interp(speeds, grid, values[:, j]) for j in range(values.shape[1])], 1)
+
+    for _ in range(int(iters)):
+        r_stop = 1.0 - r_move
+        scov = regularize_cov((r_stop[:, None] * world).T @ world / max(r_stop.sum(), 1e-12))
+        wgrid = np.clip((K * r_move[None, :]).sum(axis=1) / K_sum, 1e-4, 1 - 1e-4)
+        for g in range(n_knots):
+            wts = K[g] * r_move
+            if wts.sum() < 1e-8:
+                wts = K[g]
+            mu, cov = _weighted_moments(body, wts)
+            mug[g] = mu
+            covg[g] = regularize_cov(cov)
+        pi = np.interp(speeds, grid, wgrid)
+        mu_i = interp(mug)
+        cov_i = interp(covg.reshape(n_knots, 4)).reshape(-1, 2, 2)
+        lp_move = np.log(pi) - gaussian_nll(body - mu_i, cov_i)
+        lp_stop = np.log(1.0 - pi) - gaussian_nll(world, scov)
+        peak = np.maximum(lp_move, lp_stop)
+        ll = peak + np.log(np.exp(lp_move - peak) + np.exp(lp_stop - peak))
+        trace.append(float(ll.mean()))
+        r_move = np.exp(lp_move - ll)
+        if len(trace) > 5 and abs(trace[-1] - trace[-2]) < 1e-6:
+            break
+    return grid, mug.copy(), covg.copy(), scov, wgrid, trace
+
+
+def _fit_mixture_em_avg(steps, lats, world, prior_grid, prior_pdf, n_nodes, w, dt, stop_speed,
+                        transition_band, bw, n_knots, iters):
+    """Best of several EM starts on the rounding-averaged input (highest final likelihood)."""
+    omega, speed, heading = _expand_nodes(steps, lats, prior_grid, prior_pdf, n_nodes, w, dt)
+    body = _to_body(world, heading)
+    starts = [(stop_speed, transition_band), (0.1, 0.1), (0.4, 0.3), (0.05, 0.6)]
+    fits = [
+        _fit_mixture_em_avg_once(omega, speed, body, world, s0, b0, bw, n_knots, iters)
+        for s0, b0 in starts
+    ]
+    # label identification: the stopped regime must own zero speed (pi(0) < 0.5); without this the
+    # averaged fit can converge to a degenerate solution (broad "stopped" catch-all, pi ~ 0.9)
+    # of nearly equal likelihood at short leads.
+    ok = [f for f in fits if f[4][0] < 0.5] or fits
+    return max(ok, key=lambda f: f[-1][-1])
+
+
+def _fit_mixture_em_avg_once(omega, speed, body, world, stop_speed, transition_band, bw, n_knots,
+                             iters):
+    """Stopped/moving mixture of experts by EM when each frame is a mixture over quadrature nodes.
+
+    p(d | input) = sum_j omega_j [(1 - pi(s_j)) N(d_world; 0, S_stop) + pi(s_j) N(d_body_j; mu(s_j), S(s_j))].
+    E-step: joint responsibility of (node, regime). M-step as in ``_fit_mixture_em_once`` with
+    each (frame, node) row carrying its responsibility as weight.
+    """
+    n, mm = omega.shape
+    sp = speed.ravel()
+    bd = body.reshape(-1, 2)
+    n_knots = max(int(n_knots), 24)
+    grid = np.linspace(0.0, float(np.quantile(sp, 0.995)), n_knots)
+    kern = np.exp(-0.5 * ((sp[None, :] - grid[:, None]) / max(bw, 1e-6)) ** 2)
+    ramp = np.clip((sp - stop_speed) / max(transition_band, 1e-9), 0.0, 1.0)
+    rm = np.clip(ramp, 0.02, 0.98)
+    rho_m = omega.ravel() * rm
+    rho_s = omega.ravel() * (1.0 - rm)
+    feats = np.stack([np.ones(len(sp)), bd[:, 0], bd[:, 1], bd[:, 0] ** 2, bd[:, 0] * bd[:, 1],
+                      bd[:, 1] ** 2], axis=1)
+    lo = np.log(omega.ravel() + 1e-300)
+    trace = []
+    mug = np.zeros((n_knots, 2))
+    covg = np.zeros((n_knots, 2, 2))
+
+    def interp(values):
+        return np.stack([np.interp(sp, grid, values[:, j]) for j in range(values.shape[1])], 1)
+
+    for _ in range(int(iters)):
+        rs_frame = rho_s.reshape(n, mm).sum(axis=1)
+        scov = regularize_cov((rs_frame[:, None] * world).T @ world / max(rs_frame.sum(), 1e-12))
+        wgrid = np.clip((kern @ rho_m) / np.maximum(kern @ (rho_m + rho_s), 1e-12), 1e-4, 1 - 1e-4)
+        wk = kern * rho_m[None, :]
+        tot = wk.sum(axis=1)
+        weak = tot < 1e-8
+        if weak.any():
+            wk[weak] = kern[weak]
+            tot = wk.sum(axis=1)
+        m = wk @ feats / tot[:, None]  # (G, 6): E1, Ex, Ey, Exx, Exy, Eyy
+        mug = m[:, 1:3]
+        covg = np.empty((n_knots, 2, 2))
+        covg[:, 0, 0] = m[:, 3] - m[:, 1] ** 2
+        covg[:, 0, 1] = covg[:, 1, 0] = m[:, 4] - m[:, 1] * m[:, 2]
+        covg[:, 1, 1] = m[:, 5] - m[:, 2] ** 2
+        covg = np.stack([regularize_cov(c) for c in covg])
+        pi = np.interp(sp, grid, wgrid)
+        mu_i = interp(mug)
+        cov_i = interp(covg.reshape(n_knots, 4)).reshape(-1, 2, 2)
+        lp_m = lo + np.log(pi) - gaussian_nll(bd - mu_i, cov_i)
+        nll_s = gaussian_nll(world, scov)
+        lp_s = lo + np.log(1.0 - pi) - np.repeat(nll_s, mm)
+        both = np.stack([lp_m.reshape(n, mm), lp_s.reshape(n, mm)], axis=0)
+        peak = both.max(axis=(0, 2))
+        ll = peak + np.log(np.exp(both - peak[None, :, None]).sum(axis=(0, 2)))
+        trace.append(float(ll.mean()))
+        rho_m = np.exp(lp_m - np.repeat(ll, mm))
+        rho_s = np.exp(lp_s - np.repeat(ll, mm))
+        if len(trace) > 5 and abs(trace[-1] - trace[-2]) < 1e-6:
+            break
+    return grid, mug.copy(), covg.copy(), scov, wgrid, trace

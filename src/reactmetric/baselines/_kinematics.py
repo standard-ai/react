@@ -30,8 +30,8 @@ def slope_variance_factor(k: int) -> float:
 class CalibratedNoise:
     """Lightweight observation-noise / speed summary estimated from data."""
 
-    measurement_noise: float = 0.05   # meters (per-axis position std)
-    mean_speed: float = 1.2           # m/s
+    measurement_noise: float = 0.05  # meters (per-axis position std)
+    mean_speed: float = 1.2  # m/s
 
     @classmethod
     def estimate(cls, data, window: int = 5) -> CalibratedNoise:
@@ -61,3 +61,32 @@ class CalibratedNoise:
             sigma = 0.05
         mean_speed = float(np.median(np.concatenate(speeds))) if speeds else 1.2
         return cls(measurement_noise=sigma, mean_speed=mean_speed)
+
+
+def stack_tracks(data, max_tracks: int = 0, seed: int = 0, segment: int = 0):
+    """Pad a TrajectorySet (or id -> array mapping) for batched filtering.
+
+    Returns (obs, lengths, dt): obs is (N, T_max, D) with each track's last
+    position repeated past its end, and lengths holds each track's T. Tracks with
+    non-finite positions or fewer than 4 frames are dropped. With ``segment`` > 0,
+    tracks longer than that are cut into consecutive pieces of at most ``segment``
+    frames (each piece restarts the filter), which keeps padding small.
+    """
+    arrays = data.as_arrays() if hasattr(data, "as_arrays") else dict(data)
+    dt = float(data.dt) if hasattr(data, "dt") else 0.1
+    tracks = [np.asarray(a, float) for a in arrays.values()]
+    tracks = [a for a in tracks if len(a) >= 4 and np.isfinite(a).all()]
+    if max_tracks and len(tracks) > max_tracks:
+        pick = np.random.default_rng(seed).choice(len(tracks), max_tracks, replace=False)
+        tracks = [tracks[i] for i in sorted(pick)]
+    if segment:
+        tracks = [a[i : i + segment] for a in tracks for i in range(0, len(a), segment)]
+        tracks = [a for a in tracks if len(a) >= 4]
+    if not tracks:
+        raise ValueError("no usable tracks to fit on")
+    lengths = np.array([len(a) for a in tracks])
+    obs = np.empty((len(tracks), lengths.max(), tracks[0].shape[1]))
+    for i, a in enumerate(tracks):
+        obs[i, : len(a)] = a
+        obs[i, len(a) :] = a[-1]
+    return obs, lengths, dt

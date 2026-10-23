@@ -227,8 +227,10 @@ class _GRUBase(BaseForecaster):
             # Match the original GRUForecaster denormalization (row-vector @ rot).
             rot = np.array([[c, -s], [s, c]])
             means[i] = mean_norm[i, :horizon] @ rot + origins[i]
-            covs[i, :, 0, 0] = var[i, :horizon, 0]
-            covs[i, :, 1, 1] = var[i, :horizon, 1]
+            # The network's variances live in the heading-aligned frame (along-track,
+            # cross-track). With world = normalized @ rot for row vectors, the world
+            # covariance is rot.T @ diag(var) @ rot, the same map applied to the means.
+            covs[i] = np.einsum("ji,hj,jk->hik", rot, var[i, :horizon], rot)
         return Predictive(issue_frames=issue, means=means, covs=covs, horizon=horizon)
 
 

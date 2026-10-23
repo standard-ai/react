@@ -55,3 +55,39 @@ def test_pretrained_grus_load_and_predict():
 
     assert default_checkpoint_path("position").endswith("gru_position_best.pt")
     assert default_checkpoint_path("orientation").endswith("gru_orientation_best.pt")
+
+
+@pytest.mark.parametrize("variant", ["position", "orientation"])
+@pytest.mark.parametrize("heading_deg", [0.0, 60.0, -135.0])
+def test_gru_covariance_is_rotated_to_world_frame(variant, heading_deg):
+    """Network variances are along-/cross-track; the world covariance must follow the heading."""
+    torch = pytest.importorskip("torch")
+    from reactmetric.baselines import GRUOrientation, GRUPosition
+
+    class _Stub:
+        """Fixed heading-frame output: mean (1, 0) along-track, var (4, 0.25) along/cross."""
+
+        def __call__(self, x):
+            n, h = x.shape[0], 15
+            mean = torch.zeros(n, h, 2)
+            mean[:, :, 0] = 1.0
+            log_var = torch.log(torch.tensor([4.0, 0.25])).expand(n, h, 2).contiguous()
+            return mean, log_var
+
+    theta = np.deg2rad(heading_deg)
+    along = np.array([np.cos(theta), np.sin(theta)])
+    cross = np.array([-np.sin(theta), np.cos(theta)])
+    pos = np.array([3.0, -2.0]) + 0.1 * np.arange(60)[:, None] * along
+    traj = rm.Trajectory(pos, dt=0.1, id=0)
+
+    model = (GRUPosition if variant == "position" else GRUOrientation)()
+    model.model = _Stub()
+    pred = model.predict(traj)
+    assert pred is not None
+
+    cov = pred.covs[0, 0]
+    np.testing.assert_allclose(cov @ along, 4.0 * along, atol=1e-6)
+    np.testing.assert_allclose(cov @ cross, 0.25 * cross, atol=1e-6)
+    np.testing.assert_allclose(cov, cov.T, atol=1e-12)
+    # Means use the same map: 1 m ahead of the history window's first frame, along the heading.
+    np.testing.assert_allclose(pred.means[0, 0], pos[0] + along, atol=1e-6)
