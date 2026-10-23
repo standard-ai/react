@@ -36,6 +36,18 @@ try:  # built-in kinematic changepoint detector
 except Exception:  # pragma: no cover
     pass
 
+try:  # Bayesian changepoints: the default event source (paper section 3.4)
+    from .bayes import (  # noqa: F401
+        TUNED_SG,
+        BayesianChangepoints,
+        fit_hazard,
+        relabel_from_headings,
+    )
+
+    __all__ += ["BayesianChangepoints", "TUNED_SG", "fit_hazard", "relabel_from_headings"]
+except Exception:  # pragma: no cover
+    pass
+
 try:  # ruptures plugin (extras=[cpd])
     from .plugins import RupturesDetector  # noqa: F401
 

@@ -1,8 +1,11 @@
-"""Bayesian changepoint detection for REACT events (kept outside the package until validated).
+"""Bayesian changepoint detection: REACT's default event source (paper section 3.4).
 
-Offline Bayesian changepoint model (Fearnhead 2006) on the same features as the package's
+Offline Bayesian changepoint model (Fearnhead 2006) on the same features as
 KinematicChangepoints (speed and turn rate from the velocity window), reusing its event-type
-classification; only the segmentation step differs.
+classification; only the segmentation step differs. The paper's detector is
+``BayesianChangepoints.tuned_sg()``: Savitzky-Golay smoothed positions, speed, turn rate and the
+two velocity components as channels, the tuned fixed hazard, and event types relabelled from the
+headings before and after (stop, start, speed change, turn, both).
 
   * Segments: each channel is Normal with unknown mean and variance, Normal-Inverse-Gamma prior
     (kappa0, nu0) on robustly standardized features. The w-frame velocity window makes
@@ -21,7 +24,8 @@ classification; only the segmentation step differs.
 On 50 Eindhoven test tracks the hand-set PELT preset ("low", penalty 80) gave 2.4 events per
 track and an event on 81% of stationary surrogate tracks; this detector with the empirical-
 Bayes hazard (1e-2) gave 1.0 events per track and 0.7% false-event tracks, and kept mostly the
-larger speed changes, starts and stops.
+larger speed changes, starts and stops. With the tuned settings, on synthetic tracks with known
+changes: F1 0.64 within 1 s of the true change, median timing error one frame.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import numpy as np
 from scipy.signal import savgol_filter
 from scipy.special import gammaln, logsumexp
 
-from reactmetric.events.kinematic import KinematicChangepoints, segmentation_config
+from .kinematic import KinematicChangepoints, segmentation_config
 
 DEFAULT_HAZARD = 1e-2
 # Tuned on the grounded synthetic tracks with known changes (validation split; held-out F1 0.643
@@ -111,7 +115,8 @@ class BayesianChangepoints(KinematicChangepoints):
             an = a0 + ne / 2.0
             bn = b0 + 0.5 * (ss / self.temper + k0 * ne * mean**2 / kn)
             tot = tot + (
-                a0 * np.log(b0) - an * np.log(bn) + gammaln(an) - gammaln(a0) + 0.5 * np.log(k0 / kn)
+                a0 * np.log(b0) - an * np.log(bn) + gammaln(an) - gammaln(a0)
+                + 0.5 * np.log(k0 / kn)
             )
         return tot
 
@@ -137,7 +142,8 @@ class BayesianChangepoints(KinematicChangepoints):
             last = logG[N - b] + self._seg(chans, np.array(b), np.array(N), w)
             e = np.arange(b + m, N)
             if len(e):
-                lb[b] = np.logaddexp(last, logsumexp(logg[e - b] + self._seg(chans, b, e, w) + lb[e]))
+                inner = logsumexp(logg[e - b] + self._seg(chans, b, e, w) + lb[e])
+                lb[b] = np.logaddexp(last, inner)
             else:
                 lb[b] = last
         post = np.exp(la + lb - logZ)

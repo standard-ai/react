@@ -56,8 +56,8 @@ from reactmetric import baselines  # noqa: E402
 from reactmetric import information as ri  # noqa: E402
 from reactmetric.core.predictive import Predictive  # noqa: E402
 from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
-import bayes_changepoints as bcp  # noqa: E402
 from reactmetric.events import KinematicChangepoints  # noqa: E402
+from reactmetric.events import bayes as bcp  # noqa: E402
 from reactmetric.metric.survival import kaplan_meier, km_median  # noqa: E402
 from reactmetric.reference import Climatology  # noqa: E402
 
