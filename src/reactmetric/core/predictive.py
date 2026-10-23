@@ -1,8 +1,9 @@
 """Predictive: a forecaster's per-track predictive distributions over the future.
 
-For issue frame ``issue_frames[i]``, ``means[i, h]`` / ``covs[i, h]`` describe the
-predictive distribution of the position at frame ``issue_frames[i] + h`` (lead
-h+1, h = 0..H-1). This is the ND generalization of the internal TrackForecasts.
+The field's convention (ETH/UCY, Argoverse, nuScenes, trajdata, Trajectron++): the issue frame
+is the last observed frame. A forecast issued at ``issue_frames[i]`` used observations up to
+and including that frame, and ``means[i, h - 1]`` / ``covs[i, h - 1]`` describe the position at
+frame ``issue_frames[i] + h`` (lead h = 1..H).
 
 `gaussian` is the direct port (you supply means + covariances). `isotropic` is a
 diagonal shortcut. `MixturePredictive` holds Gaussian-mixture forecasts, which REACT
@@ -126,11 +127,11 @@ class Predictive:
         return len(self.issue_frames)
 
     def at_lead(self, lead: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """(target_frames, means, covs) for the lead-step forecast (1-indexed)."""
+        """(target_frames, means, covs) for the lead-h forecast: targets issue + h."""
         h = int(lead)
         if not 1 <= h <= self.horizon:
             raise ValueError(f"lead {h} outside horizon 1..{self.horizon}")
-        target = self.issue_frames + (h - 1)
+        target = self.issue_frames + h
         return target, self.means[:, h - 1], self.covs[:, h - 1]
 
     # ---- scoring ----------------------------------------------------------
@@ -144,7 +145,7 @@ class Predictive:
         observations = np.asarray(observations, dtype=float)
         n, hh, dim = self.means.shape
         t = len(observations)
-        targets = self.issue_frames[:, None] + np.arange(hh)[None, :]
+        targets = self.issue_frames[:, None] + np.arange(1, hh + 1)[None, :]
         valid = targets < t
         targets_clipped = np.minimum(targets, t - 1)
         diff = observations[targets_clipped] - self.means              # (n, H, D)
@@ -214,7 +215,7 @@ class MixturePredictive(Predictive):
         if not 1 <= h <= self.horizon:
             raise ValueError(f"lead {h} outside horizon 1..{self.horizon}")
         w = self.weights if self.weights.ndim == 2 else self.weights[:, h - 1]
-        return (self.issue_frames + (h - 1), w, self.component_means[:, h - 1],
+        return (self.issue_frames + h, w, self.component_means[:, h - 1],
                 self.component_covs[:, h - 1])
 
     @property
@@ -229,7 +230,7 @@ class MixturePredictive(Predictive):
         observations = np.asarray(observations, dtype=float)
         n, hh, J, dim = self.component_means.shape
         t = len(observations)
-        targets = self.issue_frames[:, None] + np.arange(hh)[None, :]
+        targets = self.issue_frames[:, None] + np.arange(1, hh + 1)[None, :]
         valid = targets < t
         y = observations[np.minimum(targets, t - 1)]                     # (n, H, D)
         diff = (y[:, :, None, :] - self.component_means).reshape(-1, dim)

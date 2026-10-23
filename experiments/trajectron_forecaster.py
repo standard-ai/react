@@ -6,10 +6,9 @@ https://github.com/StanfordASL/Trajectron-plus-plus (``--tpp-dir`` / ``TPP_DIR``
 single-agent (edge_encoding false) model; the Eindhoven run-1 checkpoint (epoch 30) is stored in
 ``../artifacts/trajectron/eindhoven_run1`` (``--tpp-ckpt`` / ``TPP_CKPT`` pick another epoch).
 
-Conventions (identical to the GRU baselines): ``issue_frames[i] = t + 1`` with t the last observed
-frame; ``means[i, h-1]`` forecasts frame ``issue_frames[i] + h - 1`` (lead h); the model sees
-frames t-10..t;
-issue frames run from ``history + 1`` to ``T - horizon``. Tracks must be at 10 Hz, in metres.
+Conventions (reactmetric's, the field's): ``issue_frames[i] = t``, the last observed frame;
+``means[i, h-1]`` forecasts frame ``t + h`` (lead h); the model sees frames t-10..t; issue
+frames run from ``history`` to ``T - horizon - 1``. Tracks must be at 10 Hz, in metres.
 
 Moment matching: ``predict`` collapses each mixture to its mean and covariance (analytically), which
 penalises multimodal forecasts in log score. ``predict_mixture`` keeps all components. The
@@ -185,7 +184,7 @@ class TrajectronForecaster(BaseForecaster):
             )
         t_obs = np.arange(
             self.min_issue - 1, traj.T - self.horizon
-        )  # last observed frame; issue = t_obs + 1
+        )  # last observed frame = the issue frame
         if len(t_obs) == 0:
             return None
         pos = np.asarray(traj.positions, dtype=float)
@@ -200,7 +199,7 @@ class TrajectronForecaster(BaseForecaster):
                     b = _featurize(P, tt, ht=self.history, ph=self.horizon, with_labels=False)
                     d = self._model.predict_dist(b[1], b[3], b[0], self.horizon, gmm_mode=True)
                     yield (
-                        tt + 1,
+                        tt,
                         d.log_pis[0, :, 0, :]
                         .numpy()
                         .astype(np.float64),  # (B, K), constant over steps

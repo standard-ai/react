@@ -8,8 +8,9 @@ Two forecast formats are supported, matching what the field actually emits:
 2. K trajectories + probabilities (Argoverse / Waymo / nuScenes submission style)
    -- arrays ``(K, H, D)`` with optional scores -> Predictive.from_samples.
 
-A long DataFrame has one row per (track, issue, lead). ``id`` groups tracks,
-``issue`` is the issue frame, ``lead`` is 1..H.
+A long DataFrame has one row per (track, issue, lead). ``id`` groups tracks, ``issue`` is the
+issue frame (the last observed frame, the field's convention) and ``lead`` is 1..H, so a row
+forecasts the position at frame issue + lead.
 """
 
 from __future__ import annotations

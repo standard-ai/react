@@ -231,7 +231,8 @@ class _GRUBase(BaseForecaster):
             # cross-track). With world = normalized @ rot for row vectors, the world
             # covariance is rot.T @ diag(var) @ rot, the same map applied to the means.
             covs[i] = np.einsum("ji,hj,jk->hik", rot, var[i, :horizon], rot)
-        return Predictive(issue_frames=issue, means=means, covs=covs, horizon=horizon)
+        # the history ends at ti - 1, the issue (last observed) frame; lead 1 targets ti
+        return Predictive(issue_frames=issue - 1, means=means, covs=covs, horizon=horizon)
 
 
 class GRUPosition(_GRUBase):

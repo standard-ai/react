@@ -157,7 +157,8 @@ class ConstantVelocity(BaseForecaster):
         P_prior, gains = _gain_sequence(t, dt, self.accel_noise, self.measurement_noise)
         x_prior = _filter_states(obs, dt, gains)  # (T, 2, D)
 
-        # issue frame ti sees observations up to ti - 1; column 0 targets ti itself.
+        # the filter's prior at ti uses observations up to ti - 1 (the issue frame, the last
+        # observed) and column 0 targets ti, lead 1
         issue = np.arange(L, t - H + 1)
         steps = np.arange(H) * dt
         means = x_prior[issue, 0, None, :] + steps[None, :, None] * x_prior[issue, 1, None, :]
@@ -168,4 +169,4 @@ class ConstantVelocity(BaseForecaster):
                 var[i, h] = P[0, 0] + R
                 P = F @ P @ F.T + Q
         covs = var[:, :, None, None] * np.eye(dim)[None, None]
-        return Predictive(issue_frames=issue, means=means, covs=covs, horizon=H)
+        return Predictive(issue_frames=issue - 1, means=means, covs=covs, horizon=H)

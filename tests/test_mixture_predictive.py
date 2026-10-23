@@ -30,7 +30,7 @@ def test_nll_is_the_mixture_density():
     obs = np.random.default_rng(1).normal(size=(30, 2))
     nll = m.nll_matrix(obs)
     i, h = 2, 1
-    y = obs[m.issue_frames[i] + h]
+    y = obs[m.issue_frames[i] + h + 1]  # column h is lead h + 1
     dens = 0.0
     for j in range(m.weights.shape[1]):
         S = m.component_covs[i, h, j]

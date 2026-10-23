@@ -340,7 +340,7 @@ class IMM(BaseForecaster):
                             xs_f[j] = Fs[j] @ xs_f[j]
                             Ps_f[j] = Fs[j] @ Ps_f[j] @ Fs[j].T + Qs[j]
                         mu_f = M.T @ mu_f
-                issue_frames.append(t)
+                issue_frames.append(t - 1)  # last observed frame; lead 1 targets t
                 means_out.append(f_means)
                 covs_out.append(f_covs)
 

@@ -110,7 +110,7 @@ class CTRV(BaseForecaster):
                         Ff = _jacobian(s_f, dt)
                         s_f = _ctrv_step(s_f, dt)
                         P_f = Ff @ P_f @ Ff.T + Q
-                issue_frames.append(t)
+                issue_frames.append(t - 1)  # last observed frame; lead 1 targets t
                 means_out.append(f_means)
                 covs_out.append(f_covs)
 
