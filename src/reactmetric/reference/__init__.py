@@ -12,6 +12,8 @@ import pickle
 import warnings
 from typing import Optional, Sequence
 
+import numpy as np
+
 from ..constants import DEFAULT_DT
 from .base import Reference
 from .climatology import GlobalClimatology, fit_global_climatology
@@ -71,6 +73,38 @@ class Climatology:
         raise ValueError(f"unknown reference mode '{mode}'")
 
 
+def fit_climatology(
+    data,
+    leads: Sequence[int] = (1, 5, 10, 15),
+    dt: Optional[float] = None,
+    seed: int = 0,
+    velocity_window: int = 1,
+    isotropic_stop: bool = True,
+) -> KinematicClimatology:
+    """REACT's climatology (paper section 3.5): the distribution of a person's position
+    `lead` frames ahead given only their most recent `velocity_window`-frame displacement.
+
+    A speed-conditioned mixture of a moving regime (in the body frame of the current speed
+    and heading) and a stopped regime around the current position, weights and spreads fitted
+    jointly by EM on the calibration tracks (stop_model="fitted"). isotropic_stop replaces the
+    stopped regime's fitted spread, fixed in world axes and a few percent wider along one of
+    them, by its isotropic average; the overlap tables of the exact tests rely on it, since the
+    climatology then depends on the speed alone in the mover's body frame."""
+    ref = Climatology.fit(
+        data,
+        leads=leads,
+        mode="kinematic",
+        velocity_window=velocity_window,
+        stop_model="fitted",
+        dt=dt,
+        seed=seed,
+    )
+    if isotropic_stop:
+        for lead in leads:
+            ref.stop_cov[lead] = 0.5 * np.trace(np.asarray(ref.stop_cov[lead], float)) * np.eye(2)
+    return ref
+
+
 def save(reference: Reference, path: str) -> None:
     with open(path, "wb") as f:
         pickle.dump(reference, f)
@@ -87,6 +121,7 @@ __all__ = [
     "GlobalClimatology",
     "KinematicClimatology",
     "PositionClimatology",
+    "fit_climatology",
     "fit_global_climatology",
     "fit_kinematic_climatology",
     "fit_position_climatology",

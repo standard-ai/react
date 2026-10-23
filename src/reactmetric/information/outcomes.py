@@ -204,3 +204,18 @@ def classify_lazy(evaluate, frames, t0, log_k, n_ch, onset_window, oracle=False,
             "relapse3_after": int(frames[r + 1 + seq] - frames[r]) if seq is not None else None,
         })
     return out, [None] * n_ch, {**stats, "onset": o, "react": found}
+
+
+def oracle_outcome(first_ahead, last):
+    """Oracle B's outcome: never behind the climatology, REACT the first confirmed frame
+    (frames after the event; None if never confirmed, then censored at `last`)."""
+    return {
+        "status": "recovered" if first_ahead is not None else "censored",
+        "onset": None,
+        "react": first_ahead,
+        "duration": first_ahead if first_ahead is not None else last,
+        "relapse": False,
+        "relapse_after": None,
+        "relapse3": False,
+        "relapse3_after": None,
+    }

@@ -50,6 +50,9 @@ from .base import (
     regularize_cov,
 )
 
+# shortest track stretch (in target frames) the per-frame views accept
+MIN_FRAMES = 15
+
 
 def _weighted_moments(samples: np.ndarray, weights: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     w = weights / max(float(weights.sum()), 1e-12)
@@ -177,6 +180,107 @@ class KinematicClimatology:
         c, s = np.cos(heading), np.sin(heading)
         rot = np.array([[c, -s], [s, c]])
         return rot @ mu_b, rot @ cov_b @ rot.T
+
+    # -- per-frame views used by the REACT tests (reactmetric.information) -----------------
+
+    def _anchors(self, obs: np.ndarray, lead: int, target: np.ndarray):
+        """Causal velocity (from the last velocity_window frames before issue) at each target."""
+        vw = int(self.velocity_window)
+        anchors = target - lead
+        vel = (obs[anchors] - obs[anchors - vw]) / (vw * self.dt)
+        return anchors, vel
+
+    def gaussian_frames(self, traj, lead: int, min_frames: int = MIN_FRAMES):
+        """Target frames with the climatology's moment-matched Gaussian (moving + stopped).
+
+        Returns (target, y, mu, S) over every frame with a full velocity window before its issue
+        frame, or None when the track has fewer than min_frames such frames."""
+        obs = np.asarray(traj.positions, float)
+        T = len(obs)
+        vw = int(self.velocity_window)
+        target = np.arange(lead + vw, T)
+        if len(target) < min_frames:
+            return None
+        anchors, vel = self._anchors(obs, lead, target)
+        speed = np.hypot(vel[:, 0], vel[:, 1])
+        heading = np.arctan2(vel[:, 1], vel[:, 0])
+        lam = self.move_weight(lead, speed)
+        stop = np.asarray(self.stop_cov[lead], float)
+        mu = np.empty((len(target), 2))
+        S = np.empty((len(target), 2, 2))
+        for i in range(len(target)):
+            mw, cw = self.conditional_gaussian(lead, float(speed[i]), float(heading[i]))
+            md = lam[i] * mw
+            S[i] = lam[i] * (cw + np.outer(mw, mw)) + (1.0 - lam[i]) * stop - np.outer(md, md)
+            mu[i] = obs[anchors[i]] + md
+        return target, obs[target], mu, S + 1e-8 * np.eye(2)
+
+    def mixture_frames(self, traj, lead: int, min_frames: int = MIN_FRAMES):
+        """Target frames with the climatology as its real two-regime mixture (moving, stopped).
+
+        Returns (target, y, weights (n, 2), means (n, 2, 2) absolute, covs (n, 2, 2, 2)), the same
+        density as nll_trace (gaussian_frames is its moment-matched Gaussian), or None."""
+        obs = np.asarray(traj.positions, float)
+        T = len(obs)
+        vw = int(self.velocity_window)
+        target = np.arange(lead + vw, T)
+        if len(target) < min_frames:
+            return None
+        anchors, vel = self._anchors(obs, lead, target)
+        speed = np.hypot(vel[:, 0], vel[:, 1])
+        heading = np.arctan2(vel[:, 1], vel[:, 0])
+        mu_b, cov_b = self._predict_moving(lead, speed)
+        cs, sn = np.cos(heading), np.sin(heading)
+        R = np.stack([np.stack([cs, -sn], -1), np.stack([sn, cs], -1)], -2)
+        mu_w = np.einsum("nij,nj->ni", R, mu_b)
+        cov_w = np.einsum("nij,njk,nlk->nil", R, cov_b, R)
+        lam = np.asarray(self.move_weight(lead, speed), float)
+        weights = np.column_stack([lam + 1e-12, 1.0 - lam + 1e-12])
+        weights /= weights.sum(1, keepdims=True)
+        means = np.stack([obs[anchors] + mu_w, obs[anchors]], 1)
+        stop = np.broadcast_to(np.asarray(self.stop_cov[lead], float), cov_w.shape)
+        covs = np.stack([cov_w, stop], 1) + 1e-8 * np.eye(2)
+        return target, obs[target], weights, means, covs
+
+    def frame_geometry(self, traj, lead: int, target: np.ndarray):
+        """Causal speed, heading and anchor (issue-frame) position at each target frame."""
+        obs = np.asarray(traj.positions, float)
+        anchors, vel = self._anchors(obs, lead, np.asarray(target))
+        return np.hypot(vel[:, 0], vel[:, 1]), np.arctan2(vel[:, 1], vel[:, 0]), obs[anchors]
+
+    def body_mixture(self, lead: int):
+        """The climatology in the mover's body frame as a function of speed, for OverlapTable.
+
+        Returns body(v) -> weights (V, 2), means (V, 2, 2), covs (V, 2, 2, 2). The stopped
+        regime's spread is fixed in world axes; the table uses its isotropic average."""
+        stop = np.asarray(self.stop_cov[lead], float)
+        stop_iso = 0.5 * np.trace(stop) * np.eye(2)
+
+        def body(v):
+            mu_b, cov_b = self._predict_moving(lead, v)
+            lam = np.asarray(self.move_weight(lead, v), float)
+            w = np.column_stack([lam + 1e-12, 1.0 - lam + 1e-12])
+            w /= w.sum(1, keepdims=True)
+            means = np.stack([mu_b, np.zeros_like(mu_b)], 1)
+            covs = np.stack([cov_b, np.broadcast_to(stop_iso, cov_b.shape)], 1) + 1e-8 * np.eye(2)
+            return w, means, covs
+
+        return body
+
+    def table_axes(self, lead: int, core: float = 8.0, step: float = 1.0 / 6.0,
+                   growth: float = 1.06, reach: float = 10.0):
+        """Speed grid and body-frame axis of an OverlapTable for one lead.
+
+        Speeds: the climatology's knots and their midpoints. Positions: uniform within +-core
+        stopped-regime sds at `step` sds, then growing geometrically by `growth` per node out to
+        `reach` moving-regime sds past the moving mean. Returns (v, core, h, growth, extent)."""
+        knots = np.asarray(self.speed_grid[lead], float)
+        v = np.sort(np.concatenate([knots, 0.5 * (knots[1:] + knots[:-1])]))
+        sd_stop = float(np.sqrt(0.5 * np.trace(self.stop_cov[lead])))
+        mu_b, cov_b = self._predict_moving(lead, v)
+        far = np.abs(mu_b).max(1) + reach * np.sqrt(np.linalg.eigvalsh(cov_b)[:, 1])
+        c = core * sd_stop
+        return v, c, step * sd_stop, growth, max(float(far.max()), 2.0 * c)
 
     def displacement_prior(self, lead: int, speed: float, heading: float) -> GaussianMixtureND:
         mu_w, cov_w = self.conditional_gaussian(lead, float(speed), float(heading))
@@ -391,85 +495,6 @@ def _fit_mixture_em_once(speeds, body, world, stop_speed, transition_band, bw, n
         ll = peak + np.log(np.exp(lp_move - peak) + np.exp(lp_stop - peak))
         trace.append(float(ll.mean()))
         r_move = np.exp(lp_move - ll)
-        if len(trace) > 5 and abs(trace[-1] - trace[-2]) < 1e-6:
-            break
-    return grid, mug.copy(), covg.copy(), scov, wgrid, trace
-
-
-def _fit_mixture_em_avg(steps, lats, world, prior_grid, prior_pdf, n_nodes, w, dt, stop_speed,
-                        transition_band, bw, n_knots, iters):
-    """Best of several EM starts on the rounding-averaged input (highest final likelihood)."""
-    omega, speed, heading = _expand_nodes(steps, lats, prior_grid, prior_pdf, n_nodes, w, dt)
-    body = _to_body(world, heading)
-    starts = [(stop_speed, transition_band), (0.1, 0.1), (0.4, 0.3), (0.05, 0.6)]
-    fits = [
-        _fit_mixture_em_avg_once(omega, speed, body, world, s0, b0, bw, n_knots, iters)
-        for s0, b0 in starts
-    ]
-    # label identification: the stopped regime must own zero speed (pi(0) < 0.5); without this the
-    # averaged fit can converge to a degenerate solution (broad "stopped" catch-all, pi ~ 0.9)
-    # of nearly equal likelihood at short leads.
-    ok = [f for f in fits if f[4][0] < 0.5] or fits
-    return max(ok, key=lambda f: f[-1][-1])
-
-
-def _fit_mixture_em_avg_once(omega, speed, body, world, stop_speed, transition_band, bw, n_knots,
-                             iters):
-    """Stopped/moving mixture of experts by EM when each frame is a mixture over quadrature nodes.
-
-    p(d | input) = sum_j omega_j [(1 - pi(s_j)) N(d_world; 0, S_stop) + pi(s_j) N(d_body_j; mu(s_j), S(s_j))].
-    E-step: joint responsibility of (node, regime). M-step as in ``_fit_mixture_em_once`` with
-    each (frame, node) row carrying its responsibility as weight.
-    """
-    n, mm = omega.shape
-    sp = speed.ravel()
-    bd = body.reshape(-1, 2)
-    n_knots = max(int(n_knots), 24)
-    grid = np.linspace(0.0, float(np.quantile(sp, 0.995)), n_knots)
-    kern = np.exp(-0.5 * ((sp[None, :] - grid[:, None]) / max(bw, 1e-6)) ** 2)
-    ramp = np.clip((sp - stop_speed) / max(transition_band, 1e-9), 0.0, 1.0)
-    rm = np.clip(ramp, 0.02, 0.98)
-    rho_m = omega.ravel() * rm
-    rho_s = omega.ravel() * (1.0 - rm)
-    feats = np.stack([np.ones(len(sp)), bd[:, 0], bd[:, 1], bd[:, 0] ** 2, bd[:, 0] * bd[:, 1],
-                      bd[:, 1] ** 2], axis=1)
-    lo = np.log(omega.ravel() + 1e-300)
-    trace = []
-    mug = np.zeros((n_knots, 2))
-    covg = np.zeros((n_knots, 2, 2))
-
-    def interp(values):
-        return np.stack([np.interp(sp, grid, values[:, j]) for j in range(values.shape[1])], 1)
-
-    for _ in range(int(iters)):
-        rs_frame = rho_s.reshape(n, mm).sum(axis=1)
-        scov = regularize_cov((rs_frame[:, None] * world).T @ world / max(rs_frame.sum(), 1e-12))
-        wgrid = np.clip((kern @ rho_m) / np.maximum(kern @ (rho_m + rho_s), 1e-12), 1e-4, 1 - 1e-4)
-        wk = kern * rho_m[None, :]
-        tot = wk.sum(axis=1)
-        weak = tot < 1e-8
-        if weak.any():
-            wk[weak] = kern[weak]
-            tot = wk.sum(axis=1)
-        m = wk @ feats / tot[:, None]  # (G, 6): E1, Ex, Ey, Exx, Exy, Eyy
-        mug = m[:, 1:3]
-        covg = np.empty((n_knots, 2, 2))
-        covg[:, 0, 0] = m[:, 3] - m[:, 1] ** 2
-        covg[:, 0, 1] = covg[:, 1, 0] = m[:, 4] - m[:, 1] * m[:, 2]
-        covg[:, 1, 1] = m[:, 5] - m[:, 2] ** 2
-        covg = np.stack([regularize_cov(c) for c in covg])
-        pi = np.interp(sp, grid, wgrid)
-        mu_i = interp(mug)
-        cov_i = interp(covg.reshape(n_knots, 4)).reshape(-1, 2, 2)
-        lp_m = lo + np.log(pi) - gaussian_nll(bd - mu_i, cov_i)
-        nll_s = gaussian_nll(world, scov)
-        lp_s = lo + np.log(1.0 - pi) - np.repeat(nll_s, mm)
-        both = np.stack([lp_m.reshape(n, mm), lp_s.reshape(n, mm)], axis=0)
-        peak = both.max(axis=(0, 2))
-        ll = peak + np.log(np.exp(both - peak[None, :, None]).sum(axis=(0, 2)))
-        trace.append(float(ll.mean()))
-        rho_m = np.exp(lp_m - np.repeat(ll, mm))
-        rho_s = np.exp(lp_s - np.repeat(ll, mm))
         if len(trace) > 5 and abs(trace[-1] - trace[-2]) < 1e-6:
             break
     return grid, mug.copy(), covg.copy(), scov, wgrid, trace

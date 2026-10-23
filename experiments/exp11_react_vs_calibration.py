@@ -85,11 +85,11 @@ def work(args):
         if not events:
             continue
         T = len(traj.positions)
-        rm = e10.reference_mixture(traj, ref, lead)
+        rm = ref.mixture_frames(traj, lead, e10.MIN_FRAMES)
         if rm is None:
             continue
         target, y, wts, mus, covs = rm
-        speed, heading, anchor = e10.frame_geometry(traj, ref, lead, target)
+        speed, heading, anchor = ref.frame_geometry(traj, lead, target)
         mu_r, S_r = ri.mixture_moments(wts, mus, covs)
         w = e10.whiten(y, mu_r, S_r)
         # whitened variance of the measurement-noise floor sigma^2 I (as in exp10)

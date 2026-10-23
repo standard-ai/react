@@ -59,7 +59,7 @@ from reactmetric.core.trajectory import TrajectorySet  # noqa: E402
 from reactmetric.events import KinematicChangepoints  # noqa: E402
 from reactmetric.events import bayes as bcp  # noqa: E402
 from reactmetric.metric.survival import kaplan_meier, km_median  # noqa: E402
-from reactmetric.reference import Climatology  # noqa: E402
+from reactmetric.reference import Climatology, fit_climatology  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -118,174 +118,17 @@ CORR_LEN = WINDOW_CAP + 1
 # ---------------------------------------------------------------------------
 
 
-def reference_frames(traj, ref, lead):
-    """Target frames with climatology's moment-matched Gaussian (moving + stopped components)."""
-    obs = np.asarray(traj.positions, float)
-    T = len(obs)
-    vw = int(getattr(ref, "velocity_window", 5))
-    target = np.arange(lead + vw, T)
-    if len(target) < MIN_FRAMES:
-        return None
-    anchors = target - lead
-    vel = (obs[anchors] - obs[anchors - vw]) / (vw * ref.dt)
-    speed = np.hypot(vel[:, 0], vel[:, 1])
-    heading = np.arctan2(vel[:, 1], vel[:, 0])
-    lam = ref.move_weight(lead, speed)
-    stop = np.asarray(ref.stop_cov[lead], float)
-    mu = np.empty((len(target), 2))
-    S = np.empty((len(target), 2, 2))
-    for i in range(len(target)):
-        mw, cw = ref.conditional_gaussian(lead, float(speed[i]), float(heading[i]))
-        md = lam[i] * mw
-        S[i] = lam[i] * (cw + np.outer(mw, mw)) + (1.0 - lam[i]) * stop - np.outer(md, md)
-        mu[i] = obs[anchors[i]] + md
-    return target, obs[target], mu, S + 1e-8 * np.eye(2)
-
-
-def reference_mixture(traj, ref, lead):
-    """Target frames with the climatology as its real two-part mixture (moving, stopped).
-
-    Returns target, y, weights (n, 2), means (n, 2, 2) absolute, covs (n, 2, 2, 2). The same
-    density as ref.nll_trace; reference_frames is its moment-matched Gaussian.
-    """
-    obs = np.asarray(traj.positions, float)
-    T = len(obs)
-    vw = int(getattr(ref, "velocity_window", 5))
-    target = np.arange(lead + vw, T)
-    if len(target) < MIN_FRAMES:
-        return None
-    anchors = target - lead
-    vel = (obs[anchors] - obs[anchors - vw]) / (vw * ref.dt)
-    speed = np.hypot(vel[:, 0], vel[:, 1])
-    heading = np.arctan2(vel[:, 1], vel[:, 0])
-    mu_b, cov_b = ref._predict_moving(lead, speed)
-    cs, sn = np.cos(heading), np.sin(heading)
-    R = np.stack([np.stack([cs, -sn], -1), np.stack([sn, cs], -1)], -2)
-    mu_w = np.einsum("nij,nj->ni", R, mu_b)
-    cov_w = np.einsum("nij,njk,nlk->nil", R, cov_b, R)
-    lam = np.asarray(ref.move_weight(lead, speed), float)
-    weights = np.column_stack([lam + 1e-12, 1.0 - lam + 1e-12])
-    weights /= weights.sum(1, keepdims=True)
-    means = np.stack([obs[anchors] + mu_w, obs[anchors]], 1)
-    stop = np.broadcast_to(np.asarray(ref.stop_cov[lead], float), cov_w.shape)
-    covs = np.stack([cov_w, stop], 1) + 1e-8 * np.eye(2)
-    return target, obs[target], weights, means, covs
-
-
-def body_mixture(ref, lead):
-    """The climatology in the body frame as a function of speed, for ri.OverlapTable.
-
-    The stopped regime's spread is fixed in world axes and nearly isotropic (axis sds within
-    5%); the table uses its isotropic average.
-    """
-    stop = np.asarray(ref.stop_cov[lead], float)
-    stop_iso = 0.5 * np.trace(stop) * np.eye(2)
-
-    def body(v):
-        mu_b, cov_b = ref._predict_moving(lead, v)
-        lam = np.asarray(ref.move_weight(lead, v), float)
-        w = np.column_stack([lam + 1e-12, 1.0 - lam + 1e-12])
-        w /= w.sum(1, keepdims=True)
-        means = np.stack([mu_b, np.zeros_like(mu_b)], 1)
-        covs = np.stack([cov_b, np.broadcast_to(stop_iso, cov_b.shape)], 1) + 1e-8 * np.eye(2)
-        return w, means, covs
-
-    return body
-
-
-def table_setup(ref, lead):
-    """Speed grid (the climatology's knots and midpoints) and body-frame axis for one lead."""
-    knots = np.asarray(ref.speed_grid[lead], float)
-    v = np.sort(np.concatenate([knots, 0.5 * (knots[1:] + knots[:-1])]))
-    sd_stop = float(np.sqrt(0.5 * np.trace(ref.stop_cov[lead])))
-    mu_b, cov_b = ref._predict_moving(lead, v)
-    reach = np.abs(mu_b).max(1) + TABLE_REACH * np.sqrt(np.linalg.eigvalsh(cov_b)[:, 1])
-    core = TABLE_CORE * sd_stop
-    return v, core, TABLE_STEP * sd_stop, TABLE_GROWTH, max(float(reach.max()), 2.0 * core)
-
-
 def build_table(job):
     ref, lead, info, c, path, sig2 = job
     t = time.time()
-    v, core, h, growth, extent = table_setup(ref, lead)
+    v, core, h, growth, extent = ref.table_axes(
+        lead, TABLE_CORE, TABLE_STEP, TABLE_GROWTH, TABLE_REACH
+    )
     tab = ri.OverlapTable.build(
-        body_mixture(ref, lead), c, v, core, h, growth, extent, sig2=sig2, **OVERLAP
+        ref.body_mixture(lead), c, v, core, h, growth, extent, sig2=sig2, **OVERLAP
     )
     tab.save(path)
     return lead, info, time.time() - t, tab.G.shape
-
-
-def frame_geometry(traj, ref, lead, target):
-    """Causal speed, heading and anchor position of the climatology at each target frame."""
-    obs = np.asarray(traj.positions, float)
-    vw = int(getattr(ref, "velocity_window", 5))
-    anchors = target - lead
-    vel = (obs[anchors] - obs[anchors - vw]) / (vw * ref.dt)
-    return np.hypot(vel[:, 0], vel[:, 1]), np.arctan2(vel[:, 1], vel[:, 0]), obs[anchors]
-
-
-def distortion_margin(entropy, d):
-    """Rate-distortion margin (nats): the information beyond a climatology of differential
-    entropy `entropy` needed to localize a 2D position at RMS error d (target N(0, d^2/2 I)),
-    clamped at 0. The library's eps_star, with `entropy` in place of its Gaussian
-    log-determinant.
-
-    Headline (default) margin: `entropy` is that of the Gaussian with the climatology mixture's
-    total mean and covariance (ri.gaussian_entropy of the mixture moments), 1 + log 2 pi + 1/2
-    log det Sigma_mix in 2D, which includes the between-component spread. The mixture's own
-    differential entropy (ri.mixture_entropy, recorded as the "_H" alternative) understates the
-    requirement for a bimodal climatology: a standing person with a 22% chance of walking away
-    looks localized within a few cm, but the position to be reported spans the walking range."""
-    return np.maximum(entropy - (1.0 + np.log(2.0 * np.pi) + np.log(d * d / 2.0)), 0.0)
-
-
-def oracle_outcome(first_ahead, last):
-    """Oracle B's outcome: never behind the climatology, REACT the first confirmed frame."""
-    return {
-        "status": "recovered" if first_ahead is not None else "censored",
-        "onset": None,
-        "react": first_ahead,
-        "duration": first_ahead if first_ahead is not None else last,
-        "relapse": False,
-        "relapse_after": None,
-        "relapse3": False,
-        "relapse3_after": None,
-    }
-
-
-def estimate_noise_floor(tracks, window=51, quad=9, still=0.10):
-    """Measurement-noise floor sigma (m per axis): floor "A" of docs/react-spec.md.
-
-    The root-mean-square residual about a `quad`-frame local quadratic fit (centre-frame
-    residual, rescaled by 1 / sqrt(1 - leverage) to be unbiased for white noise), taken at
-    frames whose `window`-frame neighbourhood is observed stationary (every position within
-    `still` m of the window mean). Uses the tracks' observations only. Returns (sigma, n
-    residuals per axis, n tracks used)."""
-    from numpy.lib.stride_tricks import sliding_window_view as swv
-
-    h = quad // 2
-    t = np.arange(quad) - h
-    X = np.stack([np.ones(quad), t, t**2], 1)
-    P = X @ np.linalg.pinv(X)
-    kern = (np.eye(quad)[h] - P[h])[::-1]
-    scale = 1.0 / np.sqrt(1.0 - P[h, h])
-    hb = window // 2
-    res, used = [], 0
-    for tid in tracks.ids:
-        o = np.asarray(tracks[tid].positions, float)
-        if len(o) < window:
-            continue
-        win = swv(o, window, axis=0)  # (T - window + 1, 2, window)
-        mx = win.mean(-1)
-        stat = np.abs(win - mx[..., None]).max((1, 2)) < still
-        if not stat.any():
-            continue
-        used += 1
-        for a in range(2):
-            r = np.convolve(o[:, a], kern, mode="valid") * scale  # centre frame i + h
-            res.append(r[hb - h : len(o) - hb - h][stat])
-    r = np.concatenate(res) if res else np.zeros(1)
-    return float(np.sqrt(np.mean(r**2))), int(len(r) // 2), used
 
 
 def event_kinematics(obs, t0, dt, gap=5, span=10):
@@ -458,14 +301,14 @@ def calib_chunk(tracks, ref, specs, det_spec):
         preds = predict_all(models, traj)
         T = len(traj.positions)
         for lead in LEADS:
-            fr = reference_frames(traj, ref, lead)
+            fr = ref.gaussian_frames(traj, lead, MIN_FRAMES)
             if fr is None:
                 continue
             target, y, mu_r, S_r = fr
             calm = calm_mask(target, events)
             out[lead]["runs"].extend(runs_of(whiten(y, mu_r, S_r), calm))
             if calm.any():
-                _, _, wts, mus, covs = reference_mixture(traj, ref, lead)
+                _, _, wts, mus, covs = ref.mixture_frames(traj, lead, MIN_FRAMES)
                 h_mix = ri.mixture_entropy(wts[calm], mus[calm], covs[calm], nodes, gw)
                 h_cov = ri.gaussian_entropy(S_r[calm])
                 scale = np.exp(h_mix - h_cov)
@@ -554,11 +397,11 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
         obs_all = np.asarray(traj.positions, float)
         kin = {ev.t0: event_kinematics(obs_all, ev.t0, traj.dt) for ev in events}
         for lead in LEADS:
-            rm = reference_mixture(traj, ref, lead)
+            rm = ref.mixture_frames(traj, lead, MIN_FRAMES)
             if rm is None or not levels.get(lead):
                 continue
             target, y, wts, mus, covs = rm
-            speed, heading, anchor = frame_geometry(traj, ref, lead, target)
+            speed, heading, anchor = ref.frame_geometry(traj, lead, target)
             mu_r, S_r = ri.mixture_moments(wts, mus, covs)
             w = whiten(y, mu_r, S_r)
             H_ref = ri.mixture_entropy(wts, mus, covs, nodes, gw)
@@ -568,8 +411,8 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
             sn_fr = sig2 * 0.5 * np.trace(np.linalg.inv(S_r), axis1=1, axis2=2)
             # default margin: Gaussian entropy of the mixture's total covariance; "_H" alternative:
             # the mixture's own entropy
-            margin = {d: distortion_margin(H_cov, d) for d in dd}
-            margin_H = {d: distortion_margin(H_ref, d) for d in dd}
+            margin = {d: ri.distortion_margin(H_cov, d) for d in dd}
+            margin_H = {d: ri.distortion_margin(H_ref, d) for d in dd}
             ref_lp = ri.mixture_logpdf(y[:, None], ri.mixture_prep(wts, mus, covs))[:, 0]
             mfr = {
                 m: model_frames(preds[m], T, lead, ref) if scored_at(specs, m, lead) else None
@@ -703,8 +546,8 @@ def test_chunk(tracks, ref, levels, eps, log_k, specs, table_dir=None, tests_kin
                                 fa, fah = fas[j], fas[hch[j]]
                                 first_ahead = None if fa is None else int(F[fa] - ev.t0)
                                 first_ahead_H = None if fah is None else int(F[fah] - ev.t0)
-                                res = oracle_outcome(first_ahead, last)
-                                res_h = oracle_outcome(first_ahead_H, last) if with_h else None
+                                res = ri.oracle_outcome(first_ahead, last)
+                                res_h = ri.oracle_outcome(first_ahead_H, last) if with_h else None
                                 on_pd = None
                                 rec_pd = (
                                     bool(st["lbf_rec"][j, fa] < 0) if fa is not None else None
@@ -811,18 +654,10 @@ def fit_reference(calib, velocity_window, seed, cap_still=True, stop_isotropic=T
         capped, share = cap_still_runs(calib)
     else:
         capped, share = {t: np.asarray(calib[t].positions, float) for t in calib.ids}, 0.0
-    ref = Climatology.fit(
-        capped,
-        leads=LEADS,
-        mode="kinematic",
-        velocity_window=velocity_window,
-        stop_model="fitted",
-        dt=calib.dt,
-        seed=seed,
+    ref = fit_climatology(
+        capped, leads=LEADS, dt=calib.dt, seed=seed, velocity_window=velocity_window,
+        isotropic_stop=stop_isotropic,
     )
-    if stop_isotropic:
-        for lead in LEADS:
-            ref.stop_cov[lead] = 0.5 * np.trace(np.asarray(ref.stop_cov[lead], float)) * np.eye(2)
     info = {
         "stop_model": "fitted",
         "stop_isotropic": stop_isotropic,
@@ -1217,7 +1052,7 @@ def main():
     if nf.lower() == "none":
         sigma, noise_fit = 0.0, {"floor": "none"}
     elif nf.upper() == "A":
-        sigma, n_res, n_tr = estimate_noise_floor(calib)
+        sigma, n_res, n_tr = ri.estimate_noise_floor(calib)
         noise_fit = {"floor": "A", "sigma_cm": 100 * sigma, "residuals_per_axis": n_res,
                      "tracks": n_tr}
     else:
@@ -1282,8 +1117,8 @@ def main():
             for name, sel in (("standing", stand), ("moving", ~stand)):
                 row[name] = {
                     "n": int(sel.sum()),
-                    "entropy_cov": float(np.median(distortion_margin(ms_[sel, 2], d))),
-                    "entropy_mix": float(np.median(distortion_margin(ms_[sel, 1], d))),
+                    "entropy_cov": float(np.median(ri.distortion_margin(ms_[sel, 2], d))),
+                    "entropy_mix": float(np.median(ri.distortion_margin(ms_[sel, 1], d))),
                 }
             margin_med[f"{d:g}"] = row
         calib_summary[lead] = {

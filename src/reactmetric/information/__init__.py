@@ -22,8 +22,17 @@ from .densities import (
     mixture_moments,
     mixture_prep,
 )
+from .margins import distortion_margin
 from .mixture import MixtureForecast, RegimeTestsMixture
-from .outcomes import RECOVERY_BLOCK, RELAPSE_RUN, RELAPSE_WINDOW, classify, classify_lazy
+from .noise import estimate_noise_floor
+from .outcomes import (
+    RECOVERY_BLOCK,
+    RELAPSE_RUN,
+    RELAPSE_WINDOW,
+    classify,
+    classify_lazy,
+    oracle_outcome,
+)
 from .overlap import OverlapTable, overlap_on_grid
 from .regime_tests import RegimePosterior, RegimeTests, advantage_quadratic, regime_predictive
 from .truth import (
@@ -49,6 +58,8 @@ __all__ = [
     "advantage_quadratic",
     "classify",
     "classify_lazy",
+    "distortion_margin",
+    "estimate_noise_floor",
     "fit_knowable_corr",
     "gaussian_entropy",
     "gaussian_logpdf",
@@ -60,6 +71,7 @@ __all__ = [
     "mixture_logpdf",
     "mixture_moments",
     "mixture_prep",
+    "oracle_outcome",
     "overlap_corr",
     "overlap_on_grid",
     "pooled_autocorr",
