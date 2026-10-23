@@ -857,6 +857,27 @@ def summarize(records):
     return out
 
 
+def select_info_level(summary, distortion: float, threshold: float = 0.95,
+                      model: str = "oracle_B"):
+    """The paper's rule for the headline information level (section 3.7): the lowest assumed
+    level at which Oracle B recovers on at least `threshold` of events at every lead evaluated
+    at that level.
+
+    summary: ReactResult.summary() (keys (lead, info, distortion, model)). distortion: the
+    target the rule is judged at (0.0 for d = infinity). The paper does not state it; on
+    Eindhoven the rule gives the published 4.2 nats at d = 0.1 m (3 nats at d = infinity).
+
+    Returns (level or None, {level: {lead: recovered share}})."""
+    shares: Dict[float, Dict[int, float]] = {}
+    for (lead, info, dist, m), row in summary.items():
+        if m == model and np.isclose(dist, distortion):
+            shares.setdefault(float(info), {})[int(lead)] = float(row["recovered"])
+    for info in sorted(shares):
+        if all(v >= threshold for v in shares[info].values()):
+            return info, shares
+    return None, shares
+
+
 @dataclass
 class ReactResult:
     """Per-event REACT records and their summaries.
@@ -871,6 +892,10 @@ class ReactResult:
 
     def summary(self) -> Dict[Tuple, Dict]:
         return summarize(self.records)
+
+    def info_level(self, distortion: float, threshold: float = 0.95):
+        """select_info_level on this result's summary."""
+        return select_info_level(self.summary(), distortion, threshold)
 
     def to_dataframe(self):
         import pandas as pd
