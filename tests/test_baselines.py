@@ -10,6 +10,14 @@ def test_baselines_available():
     assert "ConstantVelocity" in avail and "CTRV" in avail and "IMM" in avail
 
 
+def test_baselines_public_names():
+    assert "GRU" not in rm.baselines.available()
+    for name in ("GRU", "CalibratedNoise", "default_checkpoint_path"):
+        assert name not in rm.baselines.__all__ and not hasattr(rm.baselines, name)
+    with pytest.raises(KeyError):
+        rm.baselines.build("GRU")
+
+
 def test_baselines_produce_valid_predictives(synthetic):
     traj = synthetic["test"][synthetic["test"].ids[0]]
     for f in (ConstantVelocity(), CTRV(), IMM()):
@@ -60,10 +68,10 @@ def test_pretrained_grus_load_and_predict():
         assert pred.means.shape[1] == 15
         assert np.isfinite(pred.means).all()
         assert np.isfinite(pred.covs).all()
-    from reactmetric.baselines.gru import default_checkpoint_path
+    from reactmetric.baselines.gru import _default_checkpoint_path
 
-    assert default_checkpoint_path("position").endswith("gru_position_best.pt")
-    assert default_checkpoint_path("orientation").endswith("gru_orientation_best.pt")
+    assert _default_checkpoint_path("position").endswith("gru_position_best.pt")
+    assert _default_checkpoint_path("orientation").endswith("gru_orientation_best.pt")
 
 
 @pytest.mark.parametrize("variant", ["position", "orientation"])

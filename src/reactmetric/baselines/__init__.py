@@ -1,9 +1,8 @@
 """Baseline forecasters and a registry for benchmark.add_baseline."""
 
-from ._kinematics import CalibratedNoise
 from .constant_velocity import ConstantVelocity
 
-__all__ = ["ConstantVelocity", "CalibratedNoise", "available", "build"]
+__all__ = ["ConstantVelocity", "available", "build"]
 
 # Lazily import heavier baselines so the core install stays light.
 _OPTIONAL = {}
@@ -25,7 +24,7 @@ except Exception:  # pragma: no cover
 
 _REGISTRY = {"ConstantVelocity": ConstantVelocity, **_OPTIONAL}
 
-_GRU_NAMES = ("GRU", "GRUPosition", "GRUOrientation")
+_GRU_NAMES = ("GRUPosition", "GRUOrientation")
 
 
 def available() -> list:
@@ -34,9 +33,9 @@ def available() -> list:
     try:
         import torch  # noqa: F401
 
-        from .gru import GRU, GRUOrientation, GRUPosition  # noqa: F401
+        from .gru import GRUOrientation, GRUPosition  # noqa: F401
 
-        names.extend(["GRUPosition", "GRUOrientation", "GRU"])
+        names.extend(_GRU_NAMES)
     except Exception:  # pragma: no cover
         pass
     return names
@@ -45,12 +44,9 @@ def available() -> list:
 def build(name: str, **kwargs):
     """Construct a baseline forecaster by name."""
     if name in _GRU_NAMES:
-        from .gru import GRU, GRUOrientation, GRUPosition
+        from .gru import GRUOrientation, GRUPosition
 
-        if name == "GRUOrientation":
-            return GRUOrientation(**kwargs)
-        # GRU and GRUPosition both resolve to the position checkpoint.
-        return GRUPosition(**kwargs) if name != "GRU" else GRU(**kwargs)
+        return (GRUOrientation if name == "GRUOrientation" else GRUPosition)(**kwargs)
     if name not in _REGISTRY:
         raise KeyError(f"unknown baseline '{name}'; available: {available()}")
     return _REGISTRY[name](**kwargs)
@@ -58,13 +54,8 @@ def build(name: str, **kwargs):
 
 # Re-export GRU classes when torch is present so `rm.baselines.GRUPosition` works.
 try:
-    from .gru import GRU, GRUOrientation, GRUPosition, default_checkpoint_path
+    from .gru import GRUOrientation, GRUPosition
 
-    __all__ += [
-        "GRU",
-        "GRUPosition",
-        "GRUOrientation",
-        "default_checkpoint_path",
-    ]
+    __all__ += ["GRUPosition", "GRUOrientation"]
 except Exception:  # pragma: no cover
     pass

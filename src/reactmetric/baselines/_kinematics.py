@@ -27,14 +27,14 @@ def slope_variance_factor(k: int) -> float:
 
 
 @dataclass
-class CalibratedNoise:
+class _CalibratedNoise:
     """Lightweight observation-noise / speed summary estimated from data."""
 
     measurement_noise: float = 0.05  # meters (per-axis position std)
     mean_speed: float = 1.2  # m/s
 
     @classmethod
-    def estimate(cls, data, window: int = 5) -> CalibratedNoise:
+    def estimate(cls, data, window: int = 5) -> _CalibratedNoise:
         """Estimate measurement noise (high-frequency jitter) and mean speed.
 
         Measurement noise is taken from the second-difference of positions

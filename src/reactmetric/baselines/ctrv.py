@@ -16,7 +16,7 @@ import numpy as np
 from ..core.predictive import Predictive
 from ..core.trajectory import Trajectory
 from ..forecasters.base import BaseForecaster
-from ._kinematics import CalibratedNoise
+from ._kinematics import _CalibratedNoise
 
 
 def _ctrv_step(state: np.ndarray, dt: float) -> np.ndarray:
@@ -55,7 +55,7 @@ class CTRV(BaseForecaster):
 
     def __init__(
         self,
-        calibration: Optional[CalibratedNoise] = None,
+        calibration: Optional[_CalibratedNoise] = None,
         measurement_noise: Optional[float] = None,
         history: int = 10,
         horizon: int = 15,

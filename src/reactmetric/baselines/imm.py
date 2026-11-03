@@ -23,7 +23,7 @@ from ..core.predictive import Predictive
 from ..core.trajectory import Trajectory
 from ..forecasters.base import BaseForecaster
 from ..scoring.nll import LOG_2PI
-from ._kinematics import CalibratedNoise, stack_tracks
+from ._kinematics import _CalibratedNoise, stack_tracks
 
 
 def _cv_F(dt: float) -> np.ndarray:
@@ -85,7 +85,7 @@ class IMM(BaseForecaster):
 
     def __init__(
         self,
-        calibration: Optional[CalibratedNoise] = None,
+        calibration: Optional[_CalibratedNoise] = None,
         measurement_noise: Optional[float] = None,
         history: int = 10,
         horizon: int = 15,

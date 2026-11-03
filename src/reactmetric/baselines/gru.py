@@ -30,7 +30,7 @@ _CHECKPOINT_NAMES = {
 }
 
 
-def default_checkpoint_path(variant: str = "position") -> str:
+def _default_checkpoint_path(variant: str = "position") -> str:
     """Absolute path to a shipped pretrained GRU checkpoint."""
     if variant not in _CHECKPOINT_NAMES:
         raise ValueError(f"variant must be one of {tuple(_CHECKPOINT_NAMES)}; got {variant!r}")
@@ -146,7 +146,7 @@ class _GRUBase(BaseForecaster):
                 "GRU baselines require torch: pip install 'reactmetric[torch]'"
             ) from e
 
-        path = checkpoint or default_checkpoint_path(self.variant)
+        path = checkpoint or _default_checkpoint_path(self.variant)
         ckpt = torch.load(path, map_location=device, weights_only=True)
         cfg = ckpt.get("config", {}) if isinstance(ckpt, dict) else {}
         state = (
@@ -250,7 +250,3 @@ class GRUOrientation(_GRUBase):
 
     variant = "orientation"
     input_key = "input_orientation"
-
-
-# Back-compat alias: bare ``GRU`` means the position model.
-GRU = GRUPosition
