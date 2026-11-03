@@ -1,6 +1,11 @@
 import numpy as np
 
+from reactmetric import constants
 from reactmetric.core import Predictive, Trajectory, TrajectorySet
+
+
+def test_constants_public_names():
+    assert constants.__all__ == ["DEFAULT_DT"] and not hasattr(constants, "EVENT_TYPES")
 
 
 def test_trajectory_shapes():
