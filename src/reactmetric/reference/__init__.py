@@ -70,6 +70,7 @@ def fit_climatology(
     stopped regime's fitted spread, fixed in world axes and a few percent wider along one of
     them, by its isotropic average; the overlap tables of the exact tests rely on it, since the
     climatology then depends on the speed alone in the mover's body frame."""
+    leads = tuple(int(x) for x in leads)
     ref = Climatology.fit(
         data,
         leads=leads,

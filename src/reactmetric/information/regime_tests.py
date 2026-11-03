@@ -205,31 +205,27 @@ class RegimeTests(RegimePosterior):
 
     With table (an OverlapTable for this lead and level) and geom = (speed, heading, anchor)
     per frame, G_k is looked up at every grid point and only points beyond the table are
-    computed directly. Without a table it is computed directly on every g_stride = (angle,
-    radius) grid point and interpolated between them.
+    computed directly. Without a table it is computed directly at every grid point (slow).
     """
 
-    def __init__(self, post_mu, post_C, mm_mu, mm_prior, weights, means, covs, c,
+    def __init__(self, post_mu, post_C, mm_mu, mm_prior, weights, means, covs, c, *,
                  n_angles=POLAR_ANGLES, radii=POLAR_RADII, overlap_gh=9, blob_scale=(4.0,),
-                 g_stride=(1, 1), chunk=8, min_weight=1e-12, table=None, geom=None, sig2=0.0):
+                 chunk=8, min_weight=1e-12, table=None, geom=None, sig2=0.0):
         super().__init__(
             post_mu, post_C, mm_mu, mm_prior, weights, means, covs, c, sig2=sig2
         )
         if table is not None and abs(getattr(table, "sig2", 0.0) - self.sig2) > 1e-15:
             raise ValueError("overlap table built for a different noise floor")
+        if table is not None and abs(getattr(table, "c", c) - self.c) > 1e-12:
+            raise ValueError("overlap table built for a different information level")
         self.dirs, self.radii = _polar_points(n_angles, radii)
         nodes, gw = gh_nodes_2d(overlap_gh)
         n = len(weights)
         self.G = {}
         self.n_off = 0
+        z = (self.dirs[:, None, :] * self.radii[None, :, None]).reshape(-1, 2)
         if table is not None:
-            z = (self.dirs[:, None, :] * self.radii[None, :, None]).reshape(-1, 2)
             speed, heading, anchor = geom
-        else:
-            sa, sr = g_stride
-            ia = np.arange(0, n_angles, sa)
-            ir = np.unique(np.append(np.arange(0, len(radii), sr), len(radii) - 1))
-            z = (self.dirs[ia][:, None, :] * self.radii[ir][None, :, None]).reshape(-1, 2)
         for k in range(self.K):
             for which in ("post", "prior"):
                 if which == "post":
@@ -261,22 +257,7 @@ class RegimeTests(RegimePosterior):
                         loc[r], C[r], weights[r], means[r], covs[r], k, self.c, z, nodes, gw,
                         blob_scale=blob_scale, sig2=self.sig2,
                     )
-                if table is not None:
-                    self.G[(k, which)] = g.reshape(n, n_angles, len(radii))
-                    continue
-                g = g.reshape(n, len(ia), len(ir))
-                if len(ir) < len(radii):  # linear in radius
-                    g = np.stack(
-                        [np.interp(self.radii, self.radii[ir], row)
-                         for row in g.reshape(-1, len(ir))]
-                    )
-                    g = g.reshape(n, len(ia), len(radii))
-                if sa > 1:  # periodic linear in angle
-                    frac = (np.arange(n_angles) % sa) / sa
-                    lo = np.arange(n_angles) // sa
-                    hi = (lo + 1) % len(ia)
-                    g = (1 - frac)[None, :, None] * g[:, lo] + frac[None, :, None] * g[:, hi]
-                self.G[(k, which)] = g
+                self.G[(k, which)] = g.reshape(n, n_angles, len(radii))
         # E[G] over each regime's Gaussian, for the posterior mean advantage
         tw = np.gradient(self.radii) * self.radii * np.exp(-0.5 * self.radii**2)
         tw /= tw.sum()

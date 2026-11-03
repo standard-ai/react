@@ -18,6 +18,8 @@ def estimate_noise_floor(tracks, window=51, quad=9, still=0.10):
     output that has been smoothed this is a lower bound; report sensitivity to sigma."""
     from numpy.lib.stride_tricks import sliding_window_view as swv
 
+    if window % 2 == 0 or quad % 2 == 0 or quad < 3:
+        raise ValueError(f"window and quad must be odd (quad >= 3); got {window}, {quad}")
     h = quad // 2
     t = np.arange(quad) - h
     X = np.stack([np.ones(quad), t, t**2], 1)
