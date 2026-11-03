@@ -1,6 +1,5 @@
 site_name: reactmetric
 site_description: "REACT: a metric for how quickly trajectory forecasts recover after disruptive events."
-repo_url: https://github.com/standard-ai/react
 theme:
   name: material
   palette:

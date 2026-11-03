@@ -1,6 +1,6 @@
 """The climatology's overlap term G_k: computed on a grid of truth locations, or tabulated.
 
-Paper section 3.2 / docs/react-spec.md section 6 ("Mixture references"). G_k does not depend on
+Paper section 3.2. G_k does not depend on
 the model, so it is computed once per frame and regime and shared by every model.
 """
 

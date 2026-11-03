@@ -1,6 +1,6 @@
 """Onset and recovery tests: posterior probabilities that a model is behind or ahead.
 
-Paper sections 3.2-3.3 / docs/react-spec.md section 6. The climatology is a two-regime mixture
+Paper sections 3.2-3.3. The climatology is a two-regime mixture
 (moving, stopped); the regime is made explicit in the truth model, so given the regime the
 advantage is a quadratic in the truth location minus the overlap term G_k, and its tail
 probabilities are integrated exactly on a polar grid. There is no Monte Carlo.

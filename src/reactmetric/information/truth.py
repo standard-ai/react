@@ -1,6 +1,6 @@
 """The latent truth: correlation structure and the posterior of where the person was headed.
 
-Spec: docs/react-spec.md sections 4 and 5; paper section 3.2. Every quantity here comes from the
+Paper section 3.2. Every quantity here comes from the
 observed track and the climatology alone, so the posterior is shared by every model evaluated.
 """
 

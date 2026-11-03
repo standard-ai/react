@@ -35,3 +35,4 @@ outputs/
 
 # Locally exported dataset subsets (large, regenerable)
 .data/
+examples/react_tutorial/

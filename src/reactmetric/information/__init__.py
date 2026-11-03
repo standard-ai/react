@@ -1,4 +1,4 @@
-"""The information formulation of REACT (TGF 2026 paper, section 3; docs/react-spec.md).
+"""The information formulation of REACT (Breseman and Woollard, TGF 2026, section 3).
 
 Usefulness is the log-score advantage of a forecast over a climatological reference, in nats.
 Decisions concern the model's true advantage at each frame, judged against a latent truth

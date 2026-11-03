@@ -6,7 +6,7 @@ import numpy as np
 
 
 def estimate_noise_floor(tracks, window=51, quad=9, still=0.10):
-    """Measurement-noise floor sigma (m per axis): floor "A" of docs/react-spec.md.
+    """Measurement-noise floor sigma (m per axis): the paper's floor (section 3.7).
 
     The root-mean-square residual about a `quad`-frame local quadratic fit (centre-frame
     residual, rescaled by 1 / sqrt(1 - leverage) to be unbiased for white noise), taken at

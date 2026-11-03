@@ -1,0 +1,13 @@
+reactmetric
+Copyright 2026 Standard Cognition Corp. (Standard AI)
+
+This product includes software developed at Standard Labs, a lab within Standard AI,
+by Calvin Breseman and David M. Woollard.
+
+The bundled Eindhoven Centraal sample (reactmetric/datasets/data/eindhoven_sample.csv) is an
+excerpt of "Data-driven physics-based modeling of pedestrian dynamics – dataset: Pedestrian
+trajectories at Eindhoven train station" by C. A. S. Pouw, G. G. M. van der Vleuten,
+A. Corbetta and F. Toschi (Zenodo, 2024, https://doi.org/10.5281/zenodo.13784588), licensed
+CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/). Only the selection of tracks and
+columns was changed. The pretrained GRU weights in reactmetric/baselines/checkpoints were
+trained on the same data.
