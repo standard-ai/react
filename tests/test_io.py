@@ -35,6 +35,20 @@ def test_forecasts_from_dataframe_sigma_rho():
     np.testing.assert_allclose(pred.covs[0, 0], np.diag([0.25, 0.09]), atol=1e-9)
 
 
+def test_forecasts_from_dataframe_reads_leads_by_value():
+    rows = [{"track_id": 0, "issue_frame": issue, "lead": lead,
+             "mu_x": float(100 * issue + lead), "mu_y": 0.0,
+             "sigma_x": 0.5, "sigma_y": 0.3, "rho": 0.0}
+            for issue in range(3) for lead in (1, 5, 10, 15)]
+    pred = rm.Forecasts.from_dataframe(pd.DataFrame(rows))[0]
+    assert pred.horizon == 15
+    target, mu, _ = pred.at_lead(5)
+    np.testing.assert_array_equal(target, np.arange(3) + 5)
+    np.testing.assert_array_equal(mu[:, 0], 100 * np.arange(3) + 5)
+    # a lead absent from the file is all-NaN, not the next lead's forecast
+    assert np.isnan(pred.at_lead(2)[1]).all()
+
+
 def test_forecasts_npz_roundtrip(tmp_path):
     issue = np.arange(4)
     means = np.zeros((4, 3, 2))

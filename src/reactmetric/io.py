@@ -47,15 +47,19 @@ def forecasts_from_dataframe(
     ``cov`` may be ``("sigma_x", "sigma_y", "rho")`` (the documented default) or
     explicit ``("cov_xx", "cov_xy", "cov_yy")``. For higher D pass the matching
     sigma list and use explicit covariance columns.
+
+    Leads are read by value: every track gets horizon H = the file's largest lead and a row
+    with lead h fills column h - 1. Leads (or issue/lead cells) absent from the file have NaN
+    means and identity covariances, so ``at_lead`` of a missing lead returns all-NaN means.
     """
     out: Dict[object, Predictive] = {}
     dim = len(mean)
+    if len(df) and int(df[lead].min()) < 1:
+        raise ValueError(f"leads must be >= 1; got {int(df[lead].min())}")
+    H = int(df[lead].max()) if len(df) else 0
     for tid, sub in df.groupby(id):
         sub = sub.sort_values([issue, lead])
         issues = np.sort(sub[issue].unique())
-        leads = np.sort(sub[lead].unique())
-        H = len(leads)
-        lead_index = {int(l): i for i, l in enumerate(leads)}
         issue_index = {int(t): i for i, t in enumerate(issues)}
         n = len(issues)
         means = np.full((n, H, dim), np.nan)
@@ -63,7 +67,7 @@ def forecasts_from_dataframe(
         sigma_convention = cov is not None and any("sigma" in c for c in cov)
         for _, row in sub.iterrows():
             i = issue_index[int(row[issue])]
-            h = lead_index[int(row[lead])]
+            h = int(row[lead]) - 1
             means[i, h] = [row[c] for c in mean]
             if cov is None:
                 continue
