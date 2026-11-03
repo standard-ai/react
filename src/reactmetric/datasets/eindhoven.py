@@ -3,16 +3,17 @@
 Default real-world reference dataset for reactmetric.
 
 Source:
-    Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F.
+    Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F. (2024).
     "Data-driven physics-based modeling of pedestrian dynamics - dataset:
     Pedestrian trajectories at Eindhoven train station". Zenodo.
-    https://zenodo.org/records/13784588, DOI: 10.5281/zenodo.13784588.
+    https://doi.org/10.5281/zenodo.13784588. Described in Physical Review E 110(6),
+    064102 (2024), https://doi.org/10.1103/PhysRevE.110.064102.
 
 License:
     Creative Commons Attribution 4.0 International (CC-BY-4.0).
 
 The full Zenodo record is about 4.6 GB and partitioned into 10-day parquet files,
-so the wheel ships only a tiny schema-compatible sample for tutorials/tests. Use
+so the wheel ships only a 40-track excerpt (see data/EINDHOVEN_SAMPLE_NOTICE.md). Use
 ``download_eindhoven`` or ``load_eindhoven(download=True)`` to fetch full files
 into a local cache.
 """
@@ -51,8 +52,9 @@ _DAY_FILES: Dict[str, str] = {
 def citation() -> str:
     """Human-readable attribution string for docs and generated reports."""
     return (
-        "Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F. "
-        f"({DOI}). Pedestrian trajectories at Eindhoven Centraal. Zenodo. "
+        "Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F. (2024). "
+        "Data-driven physics-based modeling of pedestrian dynamics - dataset: Pedestrian "
+        f"trajectories at Eindhoven train station. Zenodo. https://doi.org/{DOI}. "
         f"License: {LICENSE}."
     )
 
@@ -216,7 +218,7 @@ def load_eindhoven_sample(
     min_length: Optional[int] = None,
     dt: Optional[float] = None,
 ) -> TrajectorySet:
-    """Load the tiny bundled Eindhoven-format sample used by quickstart/tests.
+    """Load the bundled 40-track excerpt of the Eindhoven data (quickstart and tests).
 
     Column/unit assumptions come from ``mappings.eindhoven``. Use
     ``load_eindhoven(download=True)`` for the full Zenodo data.

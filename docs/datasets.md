@@ -70,8 +70,19 @@ directory. It is not the REACT calib/eval split.
 
 ## Eindhoven Centraal
 
-> Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F.
-> Zenodo DOI `10.5281/zenodo.13784588`; license `CC-BY-4.0`.
+Pedestrians crossing a platform of Eindhoven Centraal station, recorded at 10 Hz.
+
+> Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F. (2024). Data-driven
+> physics-based modeling of pedestrian dynamics – dataset: Pedestrian trajectories at
+> Eindhoven train station. Zenodo. <https://doi.org/10.5281/zenodo.13784588>
+>
+> Pouw, C. A. S., van der Vleuten, G. G. M., Corbetta, A., & Toschi, F. (2024). Data-driven
+> physics-based modeling of pedestrian dynamics. *Physical Review E* 110(6), 064102.
+> <https://doi.org/10.1103/PhysRevE.110.064102>
+
+Licensed [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Please cite both if you
+use the data. `load_eindhoven_sample()` returns a 40-track excerpt shipped with the package
+(tracks selected, values unmodified); the pretrained GRU baselines were trained on this data.
 
 Mapping: `object_identifier`, `time_ms`, `x_position_mm`, `y_position_mm` with
 mm→m and ms→s scales (`rm.datasets.mappings.eindhoven`).

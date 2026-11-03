@@ -41,7 +41,7 @@ DAY_FILES = {
 COLS = ["time_ms", "object_identifier", "x_position_mm", "y_position_mm"]
 
 
-def _select_ids(ids, times, n_tracks, min_length, stratify, seed):
+def _select_ids(ids, times, n_tracks, min_length, stratify, seed, max_length=None):
     """Choose up to n_tracks eligible track ids, optionally spread across hours."""
     counts = defaultdict(int)
     first_t = {}
@@ -50,8 +50,10 @@ def _select_ids(ids, times, n_tracks, min_length, stratify, seed):
         if tid not in first_t or t < first_t[tid]:
             first_t[tid] = t
 
-    eligible = np.array([t for t, c in counts.items() if c >= min_length], dtype=np.int64)
-    print(f"  {len(counts)} tracks in shard, {len(eligible)} with >= {min_length} frames")
+    top = max_length or np.inf
+    eligible = np.array([t for t, c in counts.items() if min_length <= c <= top],
+                        dtype=np.int64)
+    print(f"  {len(counts)} tracks in shard, {len(eligible)} with {min_length} to {top} frames")
     if len(eligible) <= n_tracks:
         print(f"  keeping all {len(eligible)} eligible tracks (asked for {n_tracks})")
         return set(eligible.tolist())
@@ -99,6 +101,7 @@ def main() -> None:
                     help="which cached shard to use when --src is not given")
     ap.add_argument("--tracks", type=int, default=20000, help="number of tracks to keep")
     ap.add_argument("--min-length", type=int, default=40, help="drop shorter tracks")
+    ap.add_argument("--max-length", type=int, default=None, help="drop longer tracks")
     ap.add_argument("--seed", type=int, default=0, help="sampling seed")
     ap.add_argument("--no-stratify", action="store_true",
                     help="sample uniformly instead of spreading across hours")
@@ -121,7 +124,7 @@ def main() -> None:
     times = table.column("time_ms").to_numpy()
 
     keep = _select_ids(ids, times, args.tracks, args.min_length,
-                       not args.no_stratify, args.seed)
+                       not args.no_stratify, args.seed, args.max_length)
 
     id_type = table.schema.field("object_identifier").type
     mask = pc.is_in(
