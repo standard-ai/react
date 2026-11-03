@@ -81,7 +81,7 @@ def test_forecasts_npz_keeps_mixtures_and_ids(tmp_path):
     assert list(loaded) == [3, "a__b", "3"]
     assert isinstance(loaded[3], rm.MixturePredictive)
     for key in ("weights", "means", "covs"):
-        np.testing.assert_array_equal(loaded[3].mix[key], mix.mix[key])
+        np.testing.assert_array_equal(loaded[3]._mix[key], mix._mix[key])
     assert type(loaded["a__b"]) is rm.Predictive
     np.testing.assert_array_equal(loaded["a__b"].covs, gauss.covs)
 

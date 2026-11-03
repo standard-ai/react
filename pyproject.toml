@@ -109,6 +109,11 @@ select = ["E", "F", "I", "W", "UP", "B"]
 # Keep typing.Optional/List/Tuple etc. rather than PEP 604/585 rewrites.
 ignore = ["E741", "B008", "B905", "UP006", "UP007", "UP035", "UP045"]
 
+[tool.ruff.lint.per-file-ignores]
+# package __init__ files import internal names for their own modules' use; __all__ is the API
+"src/reactmetric/**/__init__.py" = ["F401"]
+"src/reactmetric/__init__.py" = ["F401"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

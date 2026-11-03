@@ -10,9 +10,9 @@ import numpy as np
 from scipy.linalg import cholesky, solve_triangular
 
 
-def info_to_c(info_nats: float, dim: int = 2) -> float:
+def info_to_c(info: float, dim: int = 2) -> float:
     """Truth spread as a fraction of climatology's: Omega = c Sigma_ref, c = exp(-2 I / d)."""
-    return float(np.exp(-2.0 * info_nats / dim))
+    return float(np.exp(-2.0 * info / dim))
 
 
 def overlap_corr(lead: int, n_lags: int) -> np.ndarray:

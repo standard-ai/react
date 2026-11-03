@@ -43,6 +43,10 @@ DEFAULT_HAZARD = 1e-2
 TUNED_SG = dict(hazard=9e-4, min_size=30, kappa0=0.139, nu0=4.74, delta=3, threshold=0.4,
                 velocity_window=1, temper=3.0, velocity_channels=True,
                 smooth_window=5, smooth_polyorder=2, relabel_heading=True)
+# the detector's earlier defaults (before tuning), used by fit_hazard
+LEGACY = dict(hazard=DEFAULT_HAZARD, min_size=50, kappa0=1.0, nu0=1.0, threshold=0.5, delta=5,
+              velocity_window=None, temper=None, velocity_channels=False, smooth_window=0,
+              smooth_polyorder=2, relabel_heading=False)
 
 
 def _robust_sd(x):
@@ -50,12 +54,19 @@ def _robust_sd(x):
 
 
 class BayesianChangepoints(KinematicFeatures):
-    """Event source: offline Bayesian changepoints on speed and turn rate."""
+    """Event source: offline Bayesian changepoints on smoothed speed, turn rate and velocity
+    (paper section 3.4). The defaults are the paper's settings (TUNED_SG), in observations at
+    10 Hz: hazard per frame, minimum segment length, smoothing window and temper are frame
+    counts, so set them for other frame rates. LEGACY holds the earlier, untuned defaults."""
 
-    def __init__(self, hazard=DEFAULT_HAZARD, min_size=50, kappa0=1.0, nu0=1.0, threshold=0.5,
-                 delta=5, velocity_window=None, temper=None,
-                 velocity_channels=False, smooth_window=0, smooth_polyorder=2,
-                 relabel_heading=False):
+    def __init__(self, hazard=TUNED_SG["hazard"], min_size=TUNED_SG["min_size"],
+                 kappa0=TUNED_SG["kappa0"], nu0=TUNED_SG["nu0"],
+                 threshold=TUNED_SG["threshold"], delta=TUNED_SG["delta"],
+                 velocity_window=TUNED_SG["velocity_window"], temper=TUNED_SG["temper"],
+                 velocity_channels=TUNED_SG["velocity_channels"],
+                 smooth_window=TUNED_SG["smooth_window"],
+                 smooth_polyorder=TUNED_SG["smooth_polyorder"],
+                 relabel_heading=TUNED_SG["relabel_heading"]):
         over = {} if velocity_window is None else {"velocity_window": int(velocity_window)}
         super().__init__(SegmentationConfig(min_size=min_size, **over))
         self.hazard, self.kappa0, self.nu0 = float(hazard), float(kappa0), float(nu0)
@@ -73,7 +84,7 @@ class BayesianChangepoints(KinematicFeatures):
 
     @classmethod
     def tuned_sg(cls, hazard=None, **kw):
-        """Tuned settings (speed, turn, vx, vy; Savitzky-Golay pre-smoothing), see TUNED_SG."""
+        """The paper's settings (the defaults), with optional overrides; see TUNED_SG."""
         cfg = dict(TUNED_SG)
         if hazard is not None:
             cfg["hazard"] = float(hazard)
@@ -241,7 +252,7 @@ def relabel_from_headings(obs, events, w, dt, turn_deg=25.0, dv_min=0.2, min_spe
 
 def _summed_evidence(job):
     feats, h, kw = job
-    det = BayesianChangepoints(**kw)
+    det = BayesianChangepoints(**{**LEGACY, **kw})
     return sum(det.posterior(s, t, w, hazard=h, extra=x)[0] for s, t, w, x in feats)
 
 
@@ -252,7 +263,7 @@ def fit_hazard(trajectories, grid=None, max_tracks=120, max_len=3000, seed=0, jo
     evaluated in parallel over `jobs` processes. Returns (hazard, {hazard: summed log
     evidence})."""
     grid = np.geomspace(1e-3, 1e-1, 9) if grid is None else np.asarray(grid, float)
-    det = BayesianChangepoints(**kw)
+    det = BayesianChangepoints(**{**LEGACY, **kw})
     feats = []
     for traj in trajectories:
         f = det._features_std(traj)

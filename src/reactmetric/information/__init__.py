@@ -46,36 +46,5 @@ from .truth import (
     truth_posterior,
 )
 
-__all__ = [
-    "MixtureForecast",
-    "OverlapTable",
-    "RECOVERY_BLOCK",
-    "RELAPSE_RUN",
-    "RELAPSE_WINDOW",
-    "RegimePosterior",
-    "RegimeTests",
-    "RegimeTestsMixture",
-    "advantage_quadratic",
-    "classify",
-    "classify_lazy",
-    "distortion_margin",
-    "estimate_noise_floor",
-    "fit_knowable_corr",
-    "gaussian_entropy",
-    "gaussian_logpdf",
-    "gh_nodes_2d",
-    "info_to_c",
-    "knowable_corr",
-    "knowable_share",
-    "mixture_entropy",
-    "mixture_logpdf",
-    "mixture_moments",
-    "mixture_prep",
-    "oracle_outcome",
-    "overlap_corr",
-    "overlap_on_grid",
-    "pooled_autocorr",
-    "regime_predictive",
-    "to_world",
-    "truth_posterior",
-]
+# experimental public helpers; everything else here is internal to the scorer
+__all__ = ["distortion_margin", "estimate_noise_floor", "info_to_c"]

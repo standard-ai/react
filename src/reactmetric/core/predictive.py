@@ -44,20 +44,13 @@ class Predictive:
     # ---- constructors -----------------------------------------------------
 
     @classmethod
-    def gaussian(
-        cls, issue_frames: np.ndarray, means: np.ndarray, covs: np.ndarray
-    ) -> Predictive:
-        """Direct constructor from predictive means (n, H, D) and covs (n, H, D, D)."""
-        return cls(issue_frames, means, covs)
-
-    @classmethod
     def isotropic(
         cls, issue_frames: np.ndarray, means: np.ndarray, sigma
     ) -> Predictive:
         """Diagonal/isotropic shortcut.
 
-        ``sigma`` may be a scalar, a per-dim vector (D,), or a per-(issue, lead)
-        array broadcastable to (n, H) or (n, H, D).
+        ``sigma`` (standard deviation) may be a scalar, a per-dim vector (D,), or an array
+        of shape (n, H) or (n, H, D).
         """
         means = np.asarray(means, dtype=float)
         n, h, dim = means.shape
@@ -137,21 +130,15 @@ class Predictive:
         out = np.where(valid, nll, np.nan)
         return out
 
-    def nll(self, traj) -> np.ndarray:
-        """Per-(issue, step) NLL against a Trajectory (or an observation array)."""
-        observations = traj.positions if hasattr(traj, "positions") else np.asarray(traj)
-        return self.nll_matrix(observations)
-
-
 
 class MixturePredictive(Predictive):
     """Gaussian-mixture predictive distributions for one track (e.g. Trajectron++'s 25 modes).
 
     weights (n, J) or (n, H, J) (normalized per issue frame; mode weights shared across the
-    horizon when 2D), means (n, H, J, D), covs (n, H, J, D, D). REACT scores the mixture
-    itself (paper section 3.2); collapsing it to one Gaussian costs 0.4-0.8 nats per frame on
-    pedestrian data. The inherited ``means`` / ``covs`` / ``at_lead`` are the mixture's exact
-    moment-matched Gaussian, for consumers that need one.
+    horizon when 2D), component_means (n, H, J, D), component_covs (n, H, J, D, D). REACT
+    scores the mixture itself (paper section 3.2); collapsing it to one Gaussian costs 0.4-0.8
+    nats per frame on pedestrian data. The inherited ``means`` / ``covs`` / ``at_lead`` are the
+    mixture's exact moment-matched Gaussian, for consumers that need one.
     """
 
     __slots__ = ("weights", "component_means", "component_covs")
@@ -160,16 +147,17 @@ class MixturePredictive(Predictive):
         self,
         issue_frames: np.ndarray,
         weights: np.ndarray,
-        means: np.ndarray,
-        covs: np.ndarray,
+        component_means: np.ndarray,
+        component_covs: np.ndarray,
         horizon: Optional[int] = None,
     ):
         w = np.asarray(weights, dtype=float)
-        mu = np.asarray(means, dtype=float)
-        cv = np.asarray(covs, dtype=float)
+        mu = np.asarray(component_means, dtype=float)
+        cv = np.asarray(component_covs, dtype=float)
         if mu.ndim != 4 or cv.ndim != 5:
             raise ValueError(
-                f"means must be (n, H, J, D) and covs (n, H, J, D, D); got {mu.shape}, {cv.shape}"
+                f"component_means must be (n, H, J, D) and component_covs (n, H, J, D, D); "
+                f"got {mu.shape}, {cv.shape}"
             )
         if w.shape not in (mu.shape[:1] + mu.shape[2:3], mu.shape[:3]):
             raise ValueError(f"weights must be (n, J) or (n, H, J); got {w.shape}")
@@ -226,7 +214,7 @@ class MixturePredictive(Predictive):
         return cls(issue_frames, w, samples, np.broadcast_to(covs, (n, h, s, dim, dim)).copy())
 
     @property
-    def mix(self):
+    def _mix(self):
         """The raw arrays as a dict (issue_frames, weights, means, covs)."""
         return {"issue_frames": self.issue_frames, "weights": self.weights,
                 "means": self.component_means, "covs": self.component_covs}

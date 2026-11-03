@@ -4,7 +4,7 @@ Two forecast formats are supported, matching what the field actually emits:
 
 1. Per-step bivariate Gaussian ``(mu_x, mu_y, sigma_x, sigma_y, rho)`` -- the
    Social-LSTM / Trajectron++ / Graves parameterization. Explicit covariance
-   columns (``cov_xx, cov_xy, cov_yy``) are also accepted. -> Predictive.gaussian.
+   columns (``cov_xx, cov_xy, cov_yy``) are also accepted. -> Predictive.
 2. K trajectories + probabilities (Argoverse / Waymo / nuScenes submission style)
    -- arrays ``(K, H, D)`` with optional scores -> Predictive.from_samples.
 
@@ -44,7 +44,7 @@ def _forecasts_from_dataframe(
     mean: Sequence[str] = ("mu_x", "mu_y"),
     cov: Optional[Sequence[str]] = ("sigma_x", "sigma_y", "rho"),
 ) -> Dict[object, Predictive]:
-    """Build dict[id -> Predictive.gaussian] from a long bivariate-Gaussian DataFrame.
+    """Build dict[id -> Predictive] from a long bivariate-Gaussian DataFrame.
 
     ``cov`` may be ``("sigma_x", "sigma_y", "rho")`` (the documented default) or
     explicit ``("cov_xx", "cov_xy", "cov_yy")``. For higher D pass the matching

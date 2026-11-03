@@ -96,7 +96,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "evaluate":
-        from .benchmark import benchmark
+        from ._benchmark import benchmark
 
         data = _load_data(args.data, args.id, args.time_col, args.coords, args.dt)
         forecasts = _load_forecasts(args.forecasts, args)

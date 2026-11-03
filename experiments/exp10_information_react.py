@@ -150,7 +150,7 @@ def make_detector(spec):
     kind, arg = spec
     if kind == "bayes-sg":
         return bcp.BayesianChangepoints.tuned_sg(hazard=arg)
-    return bcp.BayesianChangepoints(hazard=arg)
+    return bcp.BayesianChangepoints(**{**bcp.LEGACY, "hazard": arg})
 
 
 def cap_still_runs(tset, cap=WINDOW_CAP, stop_speed=0.2, window=5):

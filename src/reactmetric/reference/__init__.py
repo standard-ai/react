@@ -86,21 +86,15 @@ def fit_climatology(
     return ref
 
 
-def save(reference: KinematicClimatology, path: str) -> None:
+def save_climatology(reference: KinematicClimatology, path: str) -> None:
+    """Pickle a fitted climatology (load only files you saved)."""
     with open(path, "wb") as f:
         pickle.dump(reference, f)
 
 
-def load(path: str) -> KinematicClimatology:
+def load_climatology(path: str) -> KinematicClimatology:
     with open(path, "rb") as f:
         return pickle.load(f)
 
 
-__all__ = [
-    "Climatology",
-    "KinematicClimatology",
-    "fit_climatology",
-    "fit_kinematic_climatology",
-    "save",
-    "load",
-]
+__all__ = ["fit_climatology", "KinematicClimatology", "save_climatology", "load_climatology"]

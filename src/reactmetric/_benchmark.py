@@ -1,6 +1,6 @@
 """One call: your forecasts against kinematic baselines and Oracle B under REACT.
 
-    result = rm.benchmark({"MyModel": my_predictives}, test, calibration=calib)
+    result = rm.benchmark({"MyModel": my_predictives}, test, calib)
     result.table(lead=10, distortion=0.1)
 
 A convenience over ReactScorer: it fits the scorer on the calibration tracks, adds the requested
@@ -18,12 +18,12 @@ from .scorer import LEADS, ReactResult, ReactScorer
 DEFAULT_BASELINES = ("ConstantVelocity", "CTRV", "IMM")
 
 
-def build_baselines(names: Sequence[str], calibration=None) -> dict:
-    """Baseline forecasters by name; ConstantVelocity is fitted on `calibration` when given."""
+def build_baselines(names: Sequence[str], calib=None) -> dict:
+    """Baseline forecasters by name; ConstantVelocity is fitted on `calib` when given."""
     out = {}
     for name in names:
-        if name == "ConstantVelocity" and calibration is not None:
-            out[name] = _baselines.ConstantVelocity.fit(calibration)
+        if name == "ConstantVelocity" and calib is not None:
+            out[name] = _baselines.ConstantVelocity.fit(calib)
         else:
             out[name] = _baselines.build(name)
     return out
@@ -32,7 +32,7 @@ def build_baselines(names: Sequence[str], calibration=None) -> dict:
 def benchmark(
     forecasts: Mapping[str, object],
     data,
-    calibration,
+    calib,
     baselines: Sequence[str] = DEFAULT_BASELINES,
     info: Optional[Sequence[float]] = None,
     leads: Optional[Sequence[int]] = None,
@@ -43,7 +43,7 @@ def benchmark(
     **fit_kwargs,
 ) -> ReactResult:
     """Score `forecasts` (name -> Forecaster or {track id: Predictive}) and the named baselines
-    on the test tracks `data`, with REACT fitted on the `calibration` tracks.
+    on the test tracks `data`, with REACT fitted on the calibration tracks `calib`.
 
     info: assumed information levels (nats; default 3, 4.2, 6). leads: default 1, 5, 10, 15.
     distortions: target distances d (m) besides d = infinity (default 0.1, 0.3). fit_kwargs go
@@ -54,10 +54,10 @@ def benchmark(
     clash = set(models) & set(baselines)
     if clash:
         raise ValueError(f"model names clash with baselines: {sorted(clash)}")
-    models.update(build_baselines(baselines, calibration))
+    models.update(build_baselines(baselines, calib))
     if scorer is None:
         scorer = ReactScorer.fit(
-            calibration, info=(3.0, 4.2, 6.0) if info is None else info,
+            calib, info=(3.0, 4.2, 6.0) if info is None else info,
             leads=LEADS if leads is None else leads,
             distortions=(0.1, 0.3) if distortions is None else distortions,
             n_jobs=n_jobs, **fit_kwargs,
