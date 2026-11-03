@@ -78,7 +78,8 @@ def work(args):
     names = models_in(specs)
     models = e10.build_models({m: specs[m] for m in names})
     nodes, gw = ri.gh_nodes_2d(e10.GH_NODES)
-    table = ri.OverlapTable.load(e10.table_path(table_dir, lead, info))
+    table = ri.OverlapTable.load(
+        e10.table_path(table_dir, lead, info, e10.table_key(ref, lead, c, sig2)))
     out = []
     for traj in tracks:
         events = sorted(det.detect(traj), key=lambda e: e.t0)

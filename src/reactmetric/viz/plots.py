@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 from ..metric.survival import kaplan_meier
+from ..results import _dist
 
 # Okabe-Ito: distinguishable under the common colour-vision deficiencies
 PALETTE = ("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9", "#D55E00", "#F0E442",
@@ -28,12 +29,14 @@ def _require_mpl():
 
 
 def react_label(lead, distortion=None, info=None) -> str:
-    """REACT(h, d; I) in the paper's notation; d = infinity for the plain comparison."""
+    """REACT(h, d; I) in the paper's notation; d = infinity (None) for the plain comparison."""
+    distortion = _dist(distortion)
     d = "∞" if not distortion else f"{distortion:g} m"
     return f"REACT({lead}, {d}; {info:g})" if info is not None else f"REACT({lead}, {d})"
 
 
 def _group(records, lead, info, distortion):
+    distortion = _dist(distortion)
     out = {}
     for r in records:
         if (r["lead"] == lead and np.isclose(r["info"], info)
@@ -42,14 +45,20 @@ def _group(records, lead, info, distortion):
     return out
 
 
-def km_curves(result, lead: int, info: float, distortion: float = 0.0, given_onset: bool = True,
-              models: Optional[Sequence[str]] = None, max_frames: int = 150, ax=None,
+def km_curves(result, lead: int, info="auto", distortion=None, given_onset: bool = True,
+              models: Optional[Sequence[str]] = None, max_frames: Optional[int] = None, ax=None,
               save: Optional[str] = None):
-    """Kaplan-Meier curves of time to recovery, one per model (Oracle B in grey)."""
+    """Kaplan-Meier curves of time to recovery, one per model (Oracle B in grey).
+
+    info: "auto" (the result's headline level) or a level; distortion: None for d = infinity
+    or a target in metres. max_frames: x-axis extent (default: the scorer's window)."""
     plt = _require_mpl()
+    info = result.headline_info()[0] if info == "auto" else info
+    max_frames = max_frames or result.window
     groups = _group(result.records, lead, info, distortion)
-    names = [m for m in (models or sorted(groups, key=lambda m: (m == "oracle_B", m)))
-             if m in groups]
+    if not groups:
+        raise ValueError(f"no records at lead {lead}, info {info}, distortion {distortion}")
+    names = [m for m in (models or [m for m in result.models if m in groups]) if m in groups]
     fig, ax = (ax.figure, ax) if ax is not None else plt.subplots(figsize=(7, 4.2))
     for i, m in enumerate(names):
         rs = groups[m]
@@ -81,14 +90,16 @@ def km_curves(result, lead: int, info: float, distortion: float = 0.0, given_ons
     return fig
 
 
-def outcome_profile(result, lead: int, info: float, distortion: float = 0.0,
+def outcome_profile(result, lead: int, info="auto", distortion=None,
                     models: Optional[Sequence[str]] = None, save: Optional[str] = None):
     """Anticipation, censoring given onset and three-frame relapse per model (bars)."""
     plt = _require_mpl()
+    info = result.headline_info()[0] if info == "auto" else info
+    distortion = _dist(distortion)
     summary = result.summary()
     rows = {k[3]: v for k, v in summary.items()
             if k[0] == lead and np.isclose(k[1], info) and np.isclose(k[2], distortion)}
-    names = [m for m in (models or sorted(rows)) if m in rows and m != "oracle_B"]
+    names = [m for m in (models or result.models) if m in rows and m != "oracle_B"]
     measures = [
         ("anticipation", lambda v: v["anticipation"]),
         ("censored given onset",

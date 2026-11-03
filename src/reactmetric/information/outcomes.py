@@ -86,7 +86,7 @@ RELAPSE_WINDOW = 10  # frames after a recovery in which a renewed onset counts a
 
 
 def classify_lazy(evaluate, frames, t0, log_k, n_ch, onset_window, oracle=False,
-                  block=RECOVERY_BLOCK, relapse_window=RELAPSE_WINDOW):
+                  block=RECOVERY_BLOCK, relapse_window=RELAPSE_WINDOW, relapse_run=RELAPSE_RUN):
     """Outcome of one event window for n_ch recovery channels (base, each distortion margin),
     testing only the frames that matter. Same headline rule as classify(first_verdict=False,
     onset_window=...), with these differences in what is tested:
@@ -98,8 +98,8 @@ def classify_lazy(evaluate, frames, t0, log_k, n_ch, onset_window, oracle=False,
     * Onset: recovery is searched after it, in blocks of `block` frames, for the channels still
       unrecovered; the search stops when all have recovered or the window ends (censored).
     * Relapse: after a recovery at frame r, a confident onset test in frames r+1 .. r+relapse_window
-      (`relapse`), or a run of RELAPSE_RUN consecutive ones starting there (it may extend
-      RELAPSE_RUN - 1 frames past the range; `relapse3`), both counted per channel. Nothing later
+      (`relapse`), or a run of `relapse_run` consecutive ones starting there (it may extend
+      relapse_run - 1 frames past the range; `relapse3`), both counted per channel. Nothing later
       counts, and no later frame is tested.
     * oracle: no onset rule; per channel, `first_ahead` is the first confidently-ahead frame,
       searched from the window start (for Oracle B).
@@ -175,7 +175,7 @@ def classify_lazy(evaluate, frames, t0, log_k, n_ch, onset_window, oracle=False,
             r = found[ch]
             ends[ch] = (
                 int(np.searchsorted(frames, frames[r] + relapse_window, side="right")),
-                int(np.searchsorted(frames, frames[r] + relapse_window + RELAPSE_RUN - 1,
+                int(np.searchsorted(frames, frames[r] + relapse_window + relapse_run - 1,
                                     side="right")),
             )
             need[r + 1 : ends[ch][1]] = True
@@ -191,7 +191,7 @@ def classify_lazy(evaluate, frames, t0, log_k, n_ch, onset_window, oracle=False,
             continue
         hi, hi3 = ends[ch]
         again = np.flatnonzero(don[r + 1 : hi] >= log_k)
-        seq = _first_run(don[r + 1 : hi3] >= log_k, RELAPSE_RUN)
+        seq = _first_run(don[r + 1 : hi3] >= log_k, relapse_run)
         seq = seq if seq is not None and seq < hi - (r + 1) else None
         out.append({
             "status": "recovered",

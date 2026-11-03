@@ -11,7 +11,8 @@ recovered within the window, and whether the recovery held:
     calib, test = data.split(fraction=0.3, seed=0)
     scorer = rm.ReactScorer.fit(calib, info=(3.0, 4.2, 6.0))
     result = scorer.evaluate({"MyModel": my_forecaster}, test)
-    result.table(lead=10, info=4.2, distortion=0.1)
+    result.table(lead=10, distortion=0.1)          # REACT(10, 0.1 m; headline level)
+    result.compare("MyModel", "ConstantVelocity", lead=10)
 
 ``rm.benchmark`` does the same with kinematic baselines added.
 """
@@ -22,8 +23,9 @@ from . import baselines, constants, datasets, events, forecasters, information, 
 from .benchmark import benchmark
 from .core import MixturePredictive, Predictive, Trajectory, TrajectorySet
 from .io import Forecasts
-from .metric import cluster_bootstrap_ci, kaplan_meier, km_median
-from .scorer import ReactResult, ReactScorer, select_info_level
+from .metric import kaplan_meier, km_median
+from .results import ReactResult, select_info_level
+from .scorer import ReactScorer
 
 __version__ = "0.2.0.dev0"
 
@@ -39,7 +41,6 @@ __all__ = [
     "select_info_level",
     "kaplan_meier",
     "km_median",
-    "cluster_bootstrap_ci",
     "baselines",
     "constants",
     "datasets",

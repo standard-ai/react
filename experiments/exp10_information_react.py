@@ -69,6 +69,7 @@ from reactmetric.scorer import (  # noqa: E402, F401  (re-exported for exp11, re
     ReactScorer,
     model_frames,
     summarize,
+    table_key,
     table_path,
     whiten,
 )
@@ -497,7 +498,7 @@ def main():
         model_leads=model_leads, table_dir=os.path.join(args.out, "tables"), n_jobs=args.jobs,
         seed=args.seed,
     )
-    noise_fit, calib_summary = scorer.noise_floor, scorer.calibration
+    noise_fit, calib_summary = scorer.noise_floor, scorer.diagnostics
     print(f"measurement-noise floor {noise_fit}", flush=True)
     print(
         f"calibration and overlap tables done ({(time.time() - t_start) / 60:.1f} min; per table "
@@ -511,8 +512,9 @@ def main():
         if n_done % max(1, n // 10) == 0 or n_done == n:
             print(f"  {n_done}/{n} tasks ({time.time() - t_test:.0f} s)", flush=True)
 
+    # the paper scored each model on every event it covers
     result = scorer.evaluate(forecasts, test, model_leads=model_leads, n_jobs=args.jobs,
-                             chunk_tracks=args.chunk_tracks, progress=progress)
+                             chunk_tracks=args.chunk_tracks, progress=progress, event_set="all")
     records, clock = result.records, result.timing
     print(
         "test phase cpu seconds (all workers): "

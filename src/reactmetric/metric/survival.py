@@ -2,13 +2,13 @@
 
 Recovery time is right-censored (a track can end, or the next regime change can
 arrive, before the model recovers), so the natural summary is a Kaplan-Meier
-product-limit estimator. Confidence intervals resample TRACKS (clusters), since
+product-limit estimator. Confidence intervals (ReactResult.ci) resample tracks, since
 events within a track are not independent.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -57,39 +57,3 @@ def km_median(times: np.ndarray, surv: np.ndarray) -> float:
     """Median survival time: first time where S drops to or below 0.5."""
     below = np.where(surv <= 0.5)[0]
     return float(times[below[0]]) if len(below) else float("nan")
-
-
-def cluster_bootstrap_ci(
-    measurements: List,
-    stat_fn: Callable[[List], float],
-    n_boot: int = 1000,
-    seed: int = 0,
-    ci: float = 0.95,
-) -> Tuple[float, float]:
-    """Bootstrap CI for a statistic of the measurements, resampling TRACKS."""
-    by_track: Dict[object, List] = {}
-    for m in measurements:
-        by_track.setdefault(m.id, []).append(m)
-    track_ids = list(by_track.keys())
-    if len(track_ids) < 2:
-        return float("nan"), float("nan")
-
-    rng = np.random.default_rng(seed)
-    idx = np.arange(len(track_ids))
-    stats = []
-    for _ in range(n_boot):
-        sample_idx = rng.choice(idx, size=len(track_ids), replace=True)
-        sample = [m for j in sample_idx for m in by_track[track_ids[j]]]
-        try:
-            v = stat_fn(sample)
-        except Exception:
-            v = float("nan")
-        if np.isfinite(v):
-            stats.append(v)
-    if not stats:
-        return float("nan"), float("nan")
-    alpha = (1.0 - ci) / 2.0
-    return (
-        float(np.percentile(stats, 100 * alpha)),
-        float(np.percentile(stats, 100 * (1 - alpha))),
-    )

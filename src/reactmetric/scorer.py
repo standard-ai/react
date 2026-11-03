@@ -4,7 +4,7 @@ Two steps, both shared by every model evaluated on a dataset::
 
     scorer = ReactScorer.fit(calib, info=(3.0, 4.2, 6.0))          # calibration tracks
     result = scorer.evaluate({"MyModel": my_forecaster}, test)       # test tracks
-    result.summary()                                                 # one row per group
+    result.table()                                                   # one row per model
 
 `fit` fits the climatology (section 3.5), the measurement-noise floor (3.7), the correlation
 structure of the truth model at each lead and information level (3.2), and the overlap tables
@@ -13,7 +13,9 @@ level and target distance decides onset, recovery and relapse (3.3) for each mod
 Oracle B (3.6). Every record carries the lead, the information level and the distortion, so a
 REACT number always travels with its assumptions: REACT(h, d; I_traj).
 
-Frames are 10 Hz frame counts throughout, as in the paper.
+Leads and windows are counts of observations (frames). The defaults are the paper's, chosen
+for 10 Hz data; at another frame rate, set them for the time spans you want (see
+ReactScorer.fit).
 """
 
 from __future__ import annotations
@@ -21,8 +23,11 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
+import shutil
 import tempfile
 import time
+import uuid
+import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -31,21 +36,30 @@ import numpy as np
 
 from . import information as ri
 from .core.predictive import MixturePredictive
-from .metric.survival import kaplan_meier, km_median
 from .reference import fit_climatology
+from .results import (  # noqa: F401  (km_summary, summarize: re-exported for the experiments)
+    CLIM,
+    ReactResult,
+    km_summary,
+    select_info_level,
+    summarize,
+)
+
+__all__ = ["ReactScorer", "ReactResult", "select_info_level"]
 
 LEADS = (1, 5, 10, 15)
-# label of the base case (distortion 0.0 in the records): no target, d = infinity
-CLIM = "clim"
-# events with fewer target frames before the next event (or the cap) are skipped; the shortest
-# track stretch the per-track frame builders accept; the shortest calm run used for correlations
-WINDOW_CAP, MIN_WINDOW, MIN_FRAMES, MIN_RUN = 150, 25, 15, 12
-# calm stretches exclude [t0 - MASK_PRE, t0 + MASK_POST]
-MASK_PRE, MASK_POST = 20, 60
-# an onset counts only within lead + ONSET_MARGIN frames of the event
-ONSET_MARGIN = 5
-# Gauss-Hermite order for the mixture entropy; frames before an event used for the pre-event score
-GH_NODES, PRE_WINDOW = 5, 30
+# the paper's windows, in observations (10 Hz): an event window ends WINDOW_CAP frames after the
+# event or at the next event; events with fewer than MIN_WINDOW frames are skipped; an onset
+# counts within lead + ONSET_MARGIN frames; calm stretches exclude [t0 - MASK_PRE, t0 + MASK_POST];
+# the pre-event score uses the PRE_WINDOW frames before an event
+WINDOW_CAP, MIN_WINDOW, ONSET_MARGIN = 150, 25, 5
+MASK_PRE, MASK_POST, PRE_WINDOW = 20, 60, 30
+RELAPSE_WINDOW, RELAPSE_RUN = ri.RELAPSE_WINDOW, ri.RELAPSE_RUN
+# the shortest track stretch the per-track frame builders accept; the shortest calm run used
+# for correlations
+MIN_FRAMES, MIN_RUN = 15, 12
+# Gauss-Hermite order for the mixture entropy
+GH_NODES = 5
 # exact overlap term: Gauss-Hermite nodes per rule
 OVERLAP = dict(overlap_gh=9)
 # overlap tables: uniform core of +-TABLE_CORE stopped-regime sds at TABLE_STEP sds, then
@@ -56,8 +70,11 @@ CORR_LEN = WINDOW_CAP + 1
 # outcome fields also recorded under the mixture-entropy margin (suffix _H)
 H_FIELDS = ("status", "react", "duration", "relapse", "relapse_after", "relapse3",
             "relapse3_after")
+# a model whose realized score averages this far below the climatology (nats per frame) is
+# probably degenerate (collapsed or misaligned covariances)
+DEGENERATE_SCORE = -10.0
 
-Forecasts = Union[Mapping[str, object], Callable[[], Mapping[str, object]]]
+ForecastSource = Union[Mapping[str, object], Callable[[], Mapping[str, object]]]
 
 
 # ---------------------------------------------------------------------------
@@ -65,16 +82,32 @@ Forecasts = Union[Mapping[str, object], Callable[[], Mapping[str, object]]]
 # ---------------------------------------------------------------------------
 
 
-def model_frames(pred, T, lead, ref):
-    """A forecast's target frames, means and covariances at one lead, or None."""
-    if pred is None or len(pred) == 0:
-        return None
+def _lead_frames(pred, T, lead, ref):
+    """Target frames, means and covariances at one lead with the mask of usable frames:
+    inside the track, with enough history for the climatology, and finite (non-finite forecast
+    frames count as missing)."""
     try:
         target, mu, S = pred.at_lead(lead)
     except ValueError:
         return None
     vw = int(getattr(ref, "velocity_window", 5))
     ok = (target < T) & (target - lead - vw >= 0)
+    ok &= np.isfinite(mu).all(1) & np.isfinite(S).all((1, 2))
+    if isinstance(pred, MixturePredictive):
+        _, w, mus, covs = pred.mixture_at_lead(lead)
+        ok &= np.isfinite(w).all(1) & np.isfinite(mus).all((1, 2)) & np.isfinite(covs).all(
+            (1, 2, 3))
+    return target, mu, S, ok
+
+
+def model_frames(pred, T, lead, ref):
+    """A forecast's target frames, means and covariances at one lead, or None."""
+    if pred is None or len(pred) == 0:
+        return None
+    fr = _lead_frames(pred, T, lead, ref)
+    if fr is None:
+        return None
+    target, mu, S, ok = fr
     if ok.sum() < MIN_FRAMES:
         return None
     return target[ok].astype(int), mu[ok], S[ok] + 1e-9 * np.eye(2)
@@ -85,10 +118,13 @@ def mixture_frames(pred, T, lead, ref):
     and order), or None for a Gaussian forecast."""
     if not isinstance(pred, MixturePredictive):
         return None
-    target, w, mu, cov = pred.mixture_at_lead(lead)
-    ok = (target < T) & (target - lead - int(getattr(ref, "velocity_window", 5)) >= 0)
+    fr = _lead_frames(pred, T, lead, ref)
+    if fr is None:
+        return None
+    ok = fr[3]
     if ok.sum() < MIN_FRAMES:
         return None
+    _, w, mu, cov = pred.mixture_at_lead(lead)
     return ri.MixtureForecast(w[ok], mu[ok], cov[ok])
 
 
@@ -96,10 +132,11 @@ def whiten(y, mu, S):
     return np.linalg.solve(np.linalg.cholesky(S), (y - mu)[..., None])[..., 0]
 
 
-def calm_mask(target, events):
+def calm_mask(target, events, exclusion=(MASK_PRE, MASK_POST)):
+    pre, post = exclusion
     mask = np.ones(len(target), bool)
     for ev in events:
-        mask &= ~((target >= ev.t0 - MASK_PRE) & (target <= ev.t0 + MASK_POST))
+        mask &= ~((target >= ev.t0 - pre) & (target <= ev.t0 + post))
     return mask
 
 
@@ -136,27 +173,52 @@ def event_kinematics(obs, t0, dt, gap=5, span=10):
     return sa, sb, turn
 
 
-def table_path(table_dir, lead, info):
-    return os.path.join(table_dir, f"overlap_lead{lead}_info{info:g}")
+# ---------------------------------------------------------------------------
+# Overlap tables, named by what they were built from
+# ---------------------------------------------------------------------------
+
+
+def _table_axes(ref, lead):
+    return ref.table_axes(lead, TABLE_CORE, TABLE_STEP, TABLE_GROWTH, TABLE_REACH)
+
+
+def table_key(ref, lead, c, sig2):
+    """Fingerprint of everything an overlap table depends on: the climatology on the table's
+    speed grid, the grid, the information level (c), the noise floor and the quadrature."""
+    v, core, h, growth, extent = _table_axes(ref, lead)
+    w, m, C = ref.body_mixture(lead)(v)
+    hsh = hashlib.sha1()
+    for a in (v, w, m, C, [core, h, growth, extent, c, sig2, OVERLAP["overlap_gh"]]):
+        hsh.update(np.ascontiguousarray(a, float).tobytes())
+    return hsh.hexdigest()[:16]
+
+
+def table_path(table_dir, lead, info, key):
+    return os.path.join(table_dir, f"overlap_lead{lead}_info{info:g}_{key}")
 
 
 def _build_table(job):
+    """Build one table unless a table with the same fingerprint is already there. Files are
+    written under temporary names and renamed, so a table is either complete or absent."""
     ref, lead, info, c, path, sig2 = job
+    if os.path.exists(path + "_meta.npz") and os.path.exists(path + ".npy"):
+        return lead, info, 0.0, "reused"
     t = time.time()
-    v, core, h, growth, extent = ref.table_axes(
-        lead, TABLE_CORE, TABLE_STEP, TABLE_GROWTH, TABLE_REACH
-    )
+    v, core, h, growth, extent = _table_axes(ref, lead)
     tab = ri.OverlapTable.build(
         ref.body_mixture(lead), c, v, core, h, growth, extent, sig2=sig2, **OVERLAP
     )
-    tab.save(path)
+    tmp = f"{path}.tmp{uuid.uuid4().hex[:8]}"
+    tab.save(tmp)
+    os.replace(tmp + ".npy", path + ".npy")
+    os.replace(tmp + "_meta.npz", path + "_meta.npz")
     return lead, info, time.time() - t, tab.G.shape
 
 
 # ---------------------------------------------------------------------------
 # Forecasts: a mapping name -> Forecaster (``predict(traj)``) or {track id: Predictive}, or a
-# zero-argument callable returning such a mapping (built once per worker process, for models
-# that are expensive or awkward to pickle)
+# zero-argument callable returning such a mapping (built once per worker process and call, for
+# models that are expensive or awkward to pickle)
 # ---------------------------------------------------------------------------
 
 _WORKER: Dict[object, object] = {}  # per-process cache: models and overlap tables
@@ -168,14 +230,15 @@ def _cached(key, make):
     return _WORKER[key]
 
 
-def _resolve(forecasts: Forecasts):
+def _resolve(forecasts: ForecastSource, token=None):
+    """The model mapping. A callable is built once per process for each fit/evaluate call
+    (token), never reused across calls."""
     if callable(forecasts) and not isinstance(forecasts, Mapping):
-        key = ("forecasts", hashlib.sha1(pickle.dumps(forecasts)).hexdigest())
-        return _cached(key, forecasts)
+        return _cached(("forecasts", token), forecasts)
     return forecasts
 
 
-def _predict_all(models, traj):
+def _predict_all(models, traj, errors):
     out = {}
     for name, f in models.items():
         if isinstance(f, Mapping):
@@ -183,9 +246,33 @@ def _predict_all(models, traj):
             continue
         try:
             out[name] = f.predict(traj)
-        except Exception:
+        except Exception as e:  # noqa: BLE001  (reported per model by the caller)
             out[name] = None
+            n, first = errors.get(name, (0, None))
+            errors[name] = (n + 1, first or f"{type(e).__name__}: {e}")
     return out
+
+
+def _warn_errors(errors, n_tracks):
+    for name, (n, first) in sorted(errors.items()):
+        warnings.warn(
+            f"{name}.predict raised on {n} of {n_tracks} tracks, which are not scored for it "
+            f"(first error: {first})", RuntimeWarning, stacklevel=3,
+        )
+
+
+def _merge_errors(total, part):
+    for name, (n, first) in part.items():
+        m, f = total.get(name, (0, None))
+        total[name] = (m + n, f or first)
+
+
+def _subset(forecasts, ids):
+    """Precomputed forecasts restricted to the tracks of one chunk."""
+    if not isinstance(forecasts, Mapping):
+        return forecasts
+    return {name: ({t: f[t] for t in ids if t in f} if isinstance(f, Mapping) else f)
+            for name, f in forecasts.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +280,12 @@ def _predict_all(models, traj):
 # ---------------------------------------------------------------------------
 
 
-def _calib_chunk(tracks, ref, forecasts, detector, model_leads, leads):
-    models = _resolve(forecasts) if forecasts is not None else {}
+def _calib_chunk(tracks, ref, forecasts, detector, model_leads, leads, token=None,
+                 exclusion=(MASK_PRE, MASK_POST)):
+    models = _resolve(forecasts, token) if forecasts is not None else {}
     names = list(models)
     nodes, gw = ri.gh_nodes_2d(GH_NODES)
+    errors: Dict[str, Tuple[int, str]] = {}
     out = {
         lead: {
             "runs": [],
@@ -211,14 +300,14 @@ def _calib_chunk(tracks, ref, forecasts, detector, model_leads, leads):
     }
     for traj in tracks.values():
         events = detector.detect(traj)
-        preds = _predict_all(models, traj)
+        preds = _predict_all(models, traj, errors)
         T = len(traj.positions)
         for lead in leads:
             fr = ref.gaussian_frames(traj, lead, MIN_FRAMES)
             if fr is None:
                 continue
             target, y, mu_r, S_r = fr
-            calm = calm_mask(target, events)
+            calm = calm_mask(target, events, exclusion)
             out[lead]["runs"].extend(runs_of(whiten(y, mu_r, S_r), calm))
             if calm.any():
                 _, _, wts, mus, covs = ref.mixture_frames(traj, lead, MIN_FRAMES)
@@ -248,6 +337,7 @@ def _calib_chunk(tracks, ref, forecasts, detector, model_leads, leads):
                 s = realized_score(y[ia], mu_m[ib], S_m[ib], mu_r[ia], S_r[ia])
                 out[lead]["s_sum"][m] += float(s.sum())
                 out[lead]["s_n"][m] += len(s)
+    out["errors"] = errors
     return out
 
 
@@ -262,6 +352,20 @@ def _small_chunks(tracks, size):
     return _split_chunks(tracks, max(1, -(-n_ids // size)))
 
 
+def _pool_error(e):
+    """BrokenProcessPool usually means a script started worker processes without a
+    `if __name__ == "__main__":` guard (macOS and Windows start workers by re-importing it)."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    if isinstance(e, BrokenProcessPool):
+        raise RuntimeError(
+            "a worker process died. If this runs from a script, put the calls behind "
+            "`if __name__ == \"__main__\":` (worker processes re-import the script), or use "
+            "n_jobs=1."
+        ) from e
+    raise e
+
+
 @dataclass
 class Level:
     """One assumed information level at one lead: c = e^-I and the fitted correlations."""
@@ -270,6 +374,36 @@ class Level:
     c: float
     rho_a: np.ndarray
     rho_b: np.ndarray
+
+
+def _check_levels(info, lead_info):
+    for I in list(info) + [x for v in (lead_info or {}).values() for x in v]:
+        if not float(I) > 0:
+            raise ValueError(f"information levels must be positive (nats); got {I}")
+
+
+def _check_distortions(distortions):
+    """Target distances besides d = infinity, which is always included (inf or None in the
+    list are ignored)."""
+    out = []
+    for d in distortions:
+        if d is None or (isinstance(d, (int, float)) and np.isinf(d)):
+            continue
+        if not float(d) > 0:
+            raise ValueError(f"target distances must be positive metres; got {d} (d = infinity "
+                             "is always included)")
+        out.append(float(d))
+    return tuple(out)
+
+
+def _check_isotropic(ref, leads):
+    for lead in leads:
+        S = np.asarray(ref.stop_cov[lead], float)
+        if not np.allclose(S, 0.5 * np.trace(S) * np.eye(2), rtol=1e-9, atol=1e-15):
+            raise ValueError(
+                f"the climatology's stopped regime at lead {lead} is not isotropic; REACT's "
+                "overlap tables assume it (fit it with fit_climatology(isotropic_stop=True))"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -281,24 +415,41 @@ class Level:
 class ReactScorer:
     """Everything REACT shares across the models evaluated on one dataset.
 
-    Build with ReactScorer.fit on calibration tracks; then evaluate() or score_track()."""
+    Build it with ReactScorer.fit on calibration tracks, then call evaluate(). Save it with
+    save() and reload it with ReactScorer.load() to score more models against the same fit.
+    """
 
-    ref: object
+    climatology: object
     levels: Dict[int, List[Level]]
     sigma: float
-    detector: object
+    events: object
     table_dir: str
     leads: Tuple[int, ...] = LEADS
     distortions: Tuple[float, ...] = (0.1, 0.3)
     p: float = 0.95
     eps: float = 0.0
     entropy_margin_info: Optional[Tuple[float, ...]] = None
-    calibration: Dict = field(default_factory=dict)
+    diagnostics: Dict = field(default_factory=dict)
     noise_floor: Dict = field(default_factory=dict)
+    window: int = WINDOW_CAP
+    min_window: int = MIN_WINDOW
+    onset_margin: int = ONSET_MARGIN
+    relapse_window: int = RELAPSE_WINDOW
+    relapse_run: int = RELAPSE_RUN
+    calm_exclusion: Tuple[int, int] = (MASK_PRE, MASK_POST)
+    pre_window: int = PRE_WINDOW
+    tables: Dict = field(default_factory=dict)  # (lead, info) -> table path
+    table_seconds: Dict = field(default_factory=dict)
 
     @property
     def log_k(self) -> float:
         return float(np.log(self.p / (1.0 - self.p)))
+
+    def __repr__(self) -> str:
+        lv = {lead: [x.info for x in v] for lead, v in self.levels.items()}
+        return (f"ReactScorer(leads={list(self.leads)}, info={lv}, distortions="
+                f"{['inf', *self.distortions]}, sigma={100 * self.sigma:.2f} cm, "
+                f"window={self.window})")
 
     # -- fitting -------------------------------------------------------------------------------
 
@@ -317,36 +468,67 @@ class ReactScorer:
         lead_info: Optional[Mapping[int, Sequence[float]]] = None,
         entropy_margin_info: Optional[Sequence[float]] = None,
         climatology=None,
-        forecasts: Optional[Forecasts] = None,
+        forecasts: Optional[ForecastSource] = None,
         model_leads: Optional[Mapping[str, Sequence[int]]] = None,
+        window: int = WINDOW_CAP,
+        min_window: int = MIN_WINDOW,
+        onset_margin: int = ONSET_MARGIN,
+        relapse_window: int = RELAPSE_WINDOW,
+        relapse_run: int = RELAPSE_RUN,
+        calm_exclusion: Tuple[int, int] = (MASK_PRE, MASK_POST),
+        pre_window: int = PRE_WINDOW,
         table_dir: Optional[str] = None,
         n_jobs: int = 1,
         seed: int = 0,
     ) -> ReactScorer:
         """Fit REACT's shared quantities on calibration tracks (a TrajectorySet).
 
-        info: assumed information levels I_traj (nats); the paper reports 3, 4.2 and 6 with 4.2
-            as the headline. lead_info: per-lead overrides (the paper ran lead 1 at 4.2 only).
-        sigma: the measurement-noise floor, "estimate" (floor A from stationary calibration
-            frames), 0 for none, or a value in metres.
-        distortions: target distances d (m) besides d = infinity, which is always included.
+        info: assumed information levels I_traj (nats, > 0); the paper reports 3, 4.2 and 6.
+            lead_info: per-lead overrides (the paper ran lead 1 at 4.2 only).
+        leads: forecast leads h, in observations.
+        sigma: the measurement-noise floor: "estimate" (from stationary calibration frames),
+            0 for none, or a value in metres.
+        distortions: target distances d (m, > 0) besides d = infinity, which is always
+            included.
         events: the event source; default BayesianChangepoints.tuned_sg() (paper section 3.4).
-        climatology: a fitted KinematicClimatology; default fit_climatology(calib, leads).
+        p: decision probability; a verdict needs posterior probability >= p.
+        eps: extra margin (nats) a forecast must beat the climatology by to count as recovered,
+            on top of the distortion margin. The paper uses 0.
+        climatology: a fitted climatology with an isotropic stopped regime; default
+            fit_climatology(calib, leads).
         forecasts: optional models, scored on calm calibration stretches; their mean realized
-            score (calibration[lead]["calm_mean_score"]) is the demonstrated information, a
+            score (diagnostics[lead]["calm_mean_score"]) is the demonstrated information, a
             lower bound on I_traj.
         entropy_margin_info: levels at which outcomes are also recorded under the
-            mixture-entropy distortion margin (the _H fields); default none.
-        table_dir: where the overlap tables are written; default a temporary directory.
+            mixture-entropy distortion margin (the _H fields); default every level.
+
+        Windows, all in observations (the defaults are the paper's at 10 Hz: 15 s, 2.5 s,
+        0.5 s, 1 s, 0.3 s, 2 s / 6 s and 3 s):
+            window: an event window ends this many frames after the event, or at the next event.
+            min_window: events with fewer frames than this before the next event are skipped.
+            onset_margin: an onset counts within lead + onset_margin frames of the event.
+            relapse_window, relapse_run: a relapse is relapse_run consecutive "behind" frames
+                starting within relapse_window frames of recovery.
+            calm_exclusion: (before, after) frames around each event left out of the calm
+                stretches the truth model's correlations are fitted on.
+            pre_window: frames before an event in the pre-event score.
+        The event detector's and noise floor's own windows are set on those objects.
+
+        table_dir: where the overlap tables are written (and reused when one with the same
+        fingerprint exists); default a temporary directory.
         """
         from .events import BayesianChangepoints
 
         leads = tuple(int(x) for x in leads)
+        _check_levels(info, lead_info)
+        distortions = _check_distortions(distortions)
         detector = events if events is not None else BayesianChangepoints.tuned_sg()
         model_leads = {k: tuple(v) for k, v in (model_leads or {}).items()}
         ref = climatology if climatology is not None else fit_climatology(
             calib, leads=leads, dt=calib.dt, seed=seed
         )
+        _check_isotropic(ref, leads)
+        corr_len = int(window) + 1
 
         if isinstance(sigma, str):
             if sigma.lower() not in ("estimate", "a"):
@@ -354,6 +536,13 @@ class ReactScorer:
             sig, n_res, n_tr = ri.estimate_noise_floor(calib)
             noise_fit = {"floor": "A", "sigma_cm": 100 * sig, "residuals_per_axis": n_res,
                          "tracks": n_tr}
+            if n_res == 0:
+                warnings.warn(
+                    "no stationary calibration frames to estimate the noise floor from; using "
+                    "no floor (sigma = 0). Pass sigma= (metres) if you know your sensor's noise.",
+                    RuntimeWarning, stacklevel=2,
+                )
+                sig, noise_fit = 0.0, {"floor": "none", "residuals_per_axis": 0, "tracks": 0}
         elif float(sigma) == 0.0:
             sig, noise_fit = 0.0, {"floor": "none"}
         else:
@@ -361,16 +550,27 @@ class ReactScorer:
         noise_fit["sigma_cm"] = 100 * sig
         sig2 = sig**2
 
+        token = uuid.uuid4().hex
         chunks = _split_chunks(calib, max(1, n_jobs))
-        args = (ref, forecasts, detector, model_leads, leads)
+        if forecasts is not None and n_jobs <= 1:
+            forecasts = _resolve(forecasts, token)
+        args = (ref, forecasts, detector, model_leads, leads, token, tuple(calm_exclusion))
         if n_jobs > 1:
-            with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-                parts = list(pool.map(_calib_chunk, chunks, *[[a] * len(chunks) for a in args]))
+            try:
+                with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+                    parts = list(pool.map(_calib_chunk, chunks,
+                                          *[[a] * len(chunks) for a in args]))
+            except Exception as e:  # noqa: BLE001
+                _pool_error(e)
         else:
             parts = [_calib_chunk(ch, *args) for ch in chunks]
+        errors: Dict[str, Tuple[int, str]] = {}
+        for pt in parts:
+            _merge_errors(errors, pt.pop("errors"))
+        _warn_errors(errors, len(calib.ids))
         names = list(parts[0][leads[0]]["s_sum"]) if parts else []
 
-        calibration, levels = {}, {}
+        diagnostics, levels = {}, {}
         for lead in leads:
             runs = [r for pt in parts for r in pt[lead]["runs"]]
             rho_w, ms = ri.pooled_autocorr(runs, N_LAGS)
@@ -379,7 +579,7 @@ class ReactScorer:
                 / max(sum(pt[lead]["s_n"][m] for pt in parts), 1)
                 for m in names
             }
-            rho_b = ri.overlap_corr(lead, CORR_LEN)
+            rho_b = ri.overlap_corr(lead, corr_len)
             # entropic information level: the calm-frame truth fraction is c times the mean
             # entropy scale of the mixture reference
             s_bar = sum(pt[lead]["scale_sum"] for pt in parts) / max(
@@ -397,7 +597,7 @@ class ReactScorer:
                     rho_w, rho_b, c * s_bar, FIT_LAGS, noise=sn_bar
                 )
                 levels[lead].append(
-                    Level(float(I), c, ri.knowable_corr(CORR_LEN, scale, tau, omega), rho_b)
+                    Level(float(I), c, ri.knowable_corr(corr_len, scale, tau, omega), rho_b)
                 )
                 fits[f"{I:.3f}"] = {"c": c, "scale": scale, "tau": tau, "omega": omega}
             ms_ = np.concatenate([x for pt in parts for x in pt[lead]["margin_samples"]])
@@ -412,7 +612,7 @@ class ReactScorer:
                         "entropy_mix": float(np.median(ri.distortion_margin(ms_[sel, 1], d))),
                     }
                 margin_med[f"{d:g}"] = row
-            calibration[lead] = {
+            diagnostics[lead] = {
                 "calm_mean_score": s_mean,
                 "reference_mean_square": ms,
                 "rho_w": rho_w[1:11].tolist(),
@@ -425,14 +625,19 @@ class ReactScorer:
 
         table_dir = table_dir or tempfile.mkdtemp(prefix="react_tables_")
         os.makedirs(table_dir, exist_ok=True)
-        jobs = [
-            (ref, lead, lv.info, lv.c, table_path(table_dir, lead, lv.info), sig2)
-            for lead in leads
-            for lv in levels[lead]
-        ]
+        paths = {
+            (lead, lv.info): table_path(table_dir, lead, lv.info,
+                                        table_key(ref, lead, lv.c, sig2))
+            for lead in leads for lv in levels[lead]
+        }
+        jobs = [(ref, lead, lv.info, lv.c, paths[(lead, lv.info)], sig2)
+                for lead in leads for lv in levels[lead]]
         if n_jobs > 1:
-            with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-                built = list(pool.map(_build_table, jobs))
+            try:
+                with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+                    built = list(pool.map(_build_table, jobs))
+            except Exception as e:  # noqa: BLE001
+                _pool_error(e)
         else:
             built = [_build_table(j) for j in jobs]
         timing = {f"L{b[0]}/{b[1]:g}": b[2] for b in built}
@@ -440,25 +645,48 @@ class ReactScorer:
         ent = None if entropy_margin_info is None else tuple(
             round(float(x), 4) for x in entropy_margin_info
         )
-        out = cls(
-            ref=ref, levels=levels, sigma=sig, detector=detector, table_dir=table_dir,
-            leads=leads, distortions=tuple(float(d) for d in distortions), p=float(p),
-            eps=float(eps), entropy_margin_info=ent, calibration=calibration,
-            noise_floor=noise_fit,
+        return cls(
+            climatology=ref, levels=levels, sigma=sig, events=detector, table_dir=table_dir,
+            leads=leads, distortions=distortions, p=float(p), eps=float(eps),
+            entropy_margin_info=ent, diagnostics=diagnostics, noise_floor=noise_fit,
+            window=int(window), min_window=int(min_window), onset_margin=int(onset_margin),
+            relapse_window=int(relapse_window), relapse_run=int(relapse_run),
+            calm_exclusion=tuple(int(x) for x in calm_exclusion), pre_window=int(pre_window),
+            tables=paths, table_seconds=timing,
         )
-        out.table_seconds = timing
-        return out
+
+    # -- saving --------------------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Save the fitted scorer and its overlap tables to the directory `path` (created),
+        to score more models later against exactly the same fit. Uses pickle: load only
+        scorers you saved yourself."""
+        os.makedirs(path, exist_ok=True)
+        tables = {}
+        for key, src in self.tables.items():
+            dst = os.path.join(path, os.path.basename(src))
+            if os.path.abspath(src) != os.path.abspath(dst):
+                for ext in (".npy", "_meta.npz"):
+                    shutil.copyfile(src + ext, dst + ext)
+            tables[key] = os.path.basename(src)
+        state = {k: v for k, v in self.__dict__.items() if k not in ("table_dir", "tables")}
+        with open(os.path.join(path, "scorer.pkl"), "wb") as f:
+            pickle.dump({"version": 1, "state": state, "tables": tables}, f)
+
+    @classmethod
+    def load(cls, path: str) -> ReactScorer:
+        """A scorer saved with save(); its tables are read from `path`."""
+        with open(os.path.join(path, "scorer.pkl"), "rb") as f:
+            blob = pickle.load(f)
+        tables = {k: os.path.join(path, v) for k, v in blob["tables"].items()}
+        return cls(**blob["state"], table_dir=path, tables=tables)
 
     # -- scoring -------------------------------------------------------------------------------
 
     def _tables(self):
         return {
-            (lead, lv.info): _cached(
-                ("table", table_path(self.table_dir, lead, lv.info)),
-                lambda p_=table_path(self.table_dir, lead, lv.info): ri.OverlapTable.load(p_),
-            )
-            for lead in self.leads
-            for lv in self.levels.get(lead, ())
+            key: _cached(("table", p_), lambda p_=p_: ri.OverlapTable.load(p_))
+            for key, p_ in self.tables.items()
         }
 
     def score_track(self, traj, predictives: Mapping[str, object], events=None,
@@ -466,10 +694,10 @@ class ReactScorer:
         """REACT records for every event on one track: one row per (lead, level, distortion,
         model, event), Oracle B included. predictives: name -> Predictive (or None).
 
-        events: the track's events (default: this scorer's detector)."""
-        ref = self.ref
+        events: the track's events (default: this scorer's event source)."""
+        ref = self.climatology
         model_leads = model_leads or {}
-        events = sorted(self.detector.detect(traj) if events is None else events,
+        events = sorted(self.events.detect(traj) if events is None else events,
                         key=lambda e: e.t0)
         clock = clock if clock is not None else {}
         for k in ("tests shared", "tests per model", "off-table points", "events", "model rows"):
@@ -517,11 +745,11 @@ class ReactScorer:
             }
             for k_ev, ev in enumerate(events):
                 nxt = events[k_ev + 1].t0 if k_ev + 1 < len(events) else np.inf
-                sel = (target > ev.t0) & (target < nxt) & (target <= ev.t0 + WINDOW_CAP)
-                if sel.sum() < MIN_WINDOW:
+                sel = (target > ev.t0) & (target < nxt) & (target <= ev.t0 + self.window)
+                if sel.sum() < self.min_window:
                     continue
                 fw, yw, mrw, Srw, ww = target[sel], y[sel], mu_r[sel], S_r[sel], w[sel]
-                pre = (target >= ev.t0 - PRE_WINDOW) & (target < ev.t0)
+                pre = (target >= ev.t0 - self.pre_window) & (target < ev.t0)
                 if k_ev > 0:
                     pre &= target > events[k_ev - 1].t0
                 clock["events"] += 1
@@ -558,7 +786,7 @@ class ReactScorer:
                             continue
                         tm, mu_m, S_m = mfr[m]
                         _, ia, ib = np.intersect1d(fw, tm, return_indices=True)
-                        if len(ia) >= MIN_WINDOW:
+                        if len(ia) >= self.min_window:
                             fcm = mixfc[m]
                             rows.append(
                                 (
@@ -614,7 +842,8 @@ class ReactScorer:
         F = fw[ia]
         oracle = m == "oracle_B"
         outs, fas, st = ri.classify_lazy(
-            evaluate, F, ev.t0, log_k, len(mg), lead + ONSET_MARGIN, oracle=oracle
+            evaluate, F, ev.t0, log_k, len(mg), lead + self.onset_margin, oracle=oracle,
+            relapse_window=self.relapse_window, relapse_run=self.relapse_run,
         )
         k_on = st["k"]  # mean I over the onset-window frames, tested for all
         I_sum = float(np.nansum(st["mean_I"][:k_on]))
@@ -693,41 +922,124 @@ class ReactScorer:
             )
         return rows
 
-    def evaluate(self, forecasts: Forecasts, data, *, model_leads=None, n_jobs: int = 1,
-                 chunk_tracks: int = 5, progress: Optional[Callable[[int, int], None]] = None):
+    def evaluate(self, forecasts: ForecastSource, data, *, model_leads=None, n_jobs: int = 1,
+                 event_set: str = "shared", chunk_tracks: int = 5,
+                 progress: Optional[Callable[[int, int], None]] = None) -> ReactResult:
         """Score every model on every event of the test tracks (a TrajectorySet).
 
-        forecasts: name -> Forecaster or {track id: Predictive}, or a zero-argument callable
-        returning that mapping (built once per worker). model_leads: name -> leads at which
-        that model is scored (default: all). Returns a ReactResult."""
+        forecasts: name -> a forecaster (anything with predict(traj) returning a Predictive
+            or MixturePredictive, or None) or {track id: Predictive}; or a zero-argument
+            callable returning that mapping, built once per worker process (for models that
+            are expensive or awkward to pickle).
+        model_leads: name -> leads at which that model is scored (default: all).
+        event_set: "shared" (default) keeps, at each lead, only the events every model has a
+            forecast window for, so models are compared on the same events, and warns when
+            that drops any; "all" scores each model on every event it covers.
+        n_jobs: worker processes. With n_jobs > 1 a script must run under
+            `if __name__ == "__main__":`.
+        progress: called as progress(chunks done, chunks) while scoring.
+
+        Returns a ReactResult. A model whose predict raises is skipped on that track, with a
+        warning."""
+        if event_set not in ("shared", "all"):
+            raise ValueError(f"event_set must be 'shared' or 'all', not {event_set!r}")
         model_leads = {k: tuple(v) for k, v in (model_leads or {}).items()}
         if isinstance(forecasts, Mapping):
             _check_ids(forecasts, data)
+        token = uuid.uuid4().hex
+        if n_jobs <= 1:
+            forecasts = _resolve(forecasts, token)
+        names = list(forecasts) if isinstance(forecasts, Mapping) else None
         chunks = _small_chunks(data, chunk_tracks)
-        results, clock = {}, {}
+        results, clock, errors = {}, {}, {}
         t0 = time.time()
+
+        def collect(i, out):
+            recs, clk, err = out
+            results[i] = recs
+            for k_, v_ in clk.items():
+                clock[k_] = clock.get(k_, 0) + v_
+            _merge_errors(errors, err)
+
         if n_jobs > 1:
-            with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-                futs = {pool.submit(_score_chunk, self, ch, forecasts, model_leads): i
-                        for i, ch in enumerate(chunks)}
-                for n_done, fut in enumerate(as_completed(futs), 1):
-                    recs, clk = fut.result()
-                    results[futs[fut]] = recs
-                    for k_, v_ in clk.items():
-                        clock[k_] = clock.get(k_, 0) + v_
-                    if progress is not None:
-                        progress(n_done, len(chunks))
+            try:
+                with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+                    futs = {pool.submit(_score_chunk, self, ch, _subset(forecasts, ch),
+                                        model_leads, token): i
+                            for i, ch in enumerate(chunks)}
+                    for n_done, fut in enumerate(as_completed(futs), 1):
+                        collect(futs[fut], fut.result())
+                        if progress is not None:
+                            progress(n_done, len(chunks))
+            except Exception as e:  # noqa: BLE001
+                _pool_error(e)
         else:
             for i, ch in enumerate(chunks):
-                recs, clk = _score_chunk(self, ch, forecasts, model_leads)
-                results[i] = recs
-                for k_, v_ in clk.items():
-                    clock[k_] = clock.get(k_, 0) + v_
+                collect(i, _score_chunk(self, ch, forecasts, model_leads, token))
                 if progress is not None:
                     progress(i + 1, len(chunks))
         clock["wall"] = time.time() - t0
+        _warn_errors(errors, len(data.ids))
         records = [r for i in sorted(results) for r in results[i]]
-        return ReactResult(records=records, scorer=self, timing=clock)
+        if names is None:
+            names = list(dict.fromkeys(r["model"] for r in records if r["model"] != "oracle_B"))
+        records, coverage = _event_coverage(records, names, model_leads, self.leads,
+                                            shared=event_set == "shared")
+        _warn_degenerate(records)
+        return ReactResult(records=records, scorer=self, timing=clock, coverage=coverage,
+                           meta={"event_set": event_set})
+
+
+def _event_coverage(records, names, model_leads, leads, shared=True):
+    """Events covered per lead and model; with shared=True keep, at each lead, only the events
+    every model scored there covers (warning when that drops any)."""
+    by = {}
+    for r in records:
+        by.setdefault(r["lead"], {}).setdefault(r["model"], set()).add((r["track"], r["t0"]))
+    coverage, keep = {}, {}
+    for lead in leads:
+        got = by.get(lead, {})
+        expected = [m for m in names if model_leads.get(m) is None or lead in model_leads[m]]
+        missing = [m for m in expected if m not in got]
+        for m in missing:
+            warnings.warn(f"{m} has no scorable forecast window at lead {lead}", RuntimeWarning,
+                          stacklevel=3)
+        present = [m for m in expected if m in got]
+        events = got.get("oracle_B", set())
+        common = set(events)
+        for m in present:
+            common &= got[m]
+        coverage[lead] = {"events": len(events), "shared": len(common),
+                          **{m: len(got[m]) for m in present}}
+        keep[lead] = common
+        dropped = len(events) - len(common)
+        if shared and dropped and present:
+            short = {m: len(events) - len(got[m]) for m in present if len(got[m]) < len(events)}
+            warnings.warn(
+                f"lead {lead}: {dropped} of {len(events)} events lack a forecast window from "
+                f"every model and are left out so all models are compared on the same "
+                f"{len(common)} events (events missing per model: {short}); pass "
+                f"event_set='all' to keep them", RuntimeWarning, stacklevel=3,
+            )
+    if shared:
+        records = [r for r in records if (r["track"], r["t0"]) in keep.get(r["lead"], ())]
+    return records, coverage
+
+
+def _warn_degenerate(records):
+    tot = {}
+    for r in records:
+        if r["model"] != "oracle_B" and r["distortion"] == 0.0:
+            k = (r["model"], r["lead"])
+            s, n = tot.get(k, (0.0, 0))
+            tot[k] = (s + r["s_sum"], n + r["n"])
+    for (m, lead), (s, n) in sorted(tot.items()):
+        if n and s / n < DEGENERATE_SCORE:
+            warnings.warn(
+                f"{m} at lead {lead} scores {s / n:.1f} nats per frame below the climatology on "
+                "average; its forecasts look degenerate (collapsed or misaligned covariances?)",
+                RuntimeWarning, stacklevel=3,
+            )
 
 
 def _check_ids(forecasts, data):
@@ -741,231 +1053,19 @@ def _check_ids(forecasts, data):
             )
 
 
-def _score_chunk(scorer, tracks, forecasts, model_leads):
-    models = _resolve(forecasts)
+def _score_chunk(scorer, tracks, forecasts, model_leads, token=None):
+    models = _resolve(forecasts, token)
     clock = {"predict": 0.0}
+    errors: Dict[str, Tuple[int, str]] = {}
     t_chunk = time.time()
     records = []
     for traj in tracks.values():
-        events = sorted(scorer.detector.detect(traj), key=lambda e: e.t0)
+        events = sorted(scorer.events.detect(traj), key=lambda e: e.t0)
         if not events:
             continue
         t_ = time.time()
-        preds = _predict_all(models, traj)
+        preds = _predict_all(models, traj, errors)
         clock["predict"] += time.time() - t_
         records.extend(scorer.score_track(traj, preds, events, model_leads, clock))
     clock["chunk total"] = time.time() - t_chunk
-    return records, clock
-
-
-# ---------------------------------------------------------------------------
-# Results
-# ---------------------------------------------------------------------------
-
-
-def _rmst(t_, s_):
-    t_ = np.append(np.minimum(t_, WINDOW_CAP), WINDOW_CAP)
-    return float(np.sum(np.diff(t_) * s_))
-
-
-def km_summary(rs, sfx=""):
-    """Anticipation and REACT for one group under one outcome rule (paper section 3.3).
-
-    Given onset: Kaplan-Meier over events with an onset (time to recovery given the forecast
-    fell behind); median REACT is its median. Over all events: anticipated ones (no onset)
-    recover at frame 0. Besides medians, the restricted mean (area under the Kaplan-Meier curve
-    up to WINDOW_CAP frames; Royston & Parmar 2013), which stays informative when over half the
-    events are anticipated."""
-    if not rs:  # e.g. the "_H" outcomes at levels where the entropy margin was not computed
-        return dict.fromkeys(
-            ("recovered", "censored", "better", "indistinguishable", "anticipation", "km_react",
-             "km_react_overall", "rmst", "rmst_cond"), float("nan"))
-    st = np.array([r["status" + sfx] for r in rs])
-    dur = np.array(
-        [np.nan if r["duration" + sfx] in (None, "") else float(r["duration" + sfx]) for r in rs]
-    )
-    onset = np.isin(st, ("recovered", "censored"))
-    out = {
-        "recovered": float(np.mean(st == "recovered")),
-        "censored": float(np.mean(st == "censored")),
-        "better": float(np.mean(st == "better")),
-        "indistinguishable": float(np.mean(st == "indistinguishable")),
-        "anticipation": float(np.mean(~onset)),
-        "km_react": float("nan"),
-        "km_react_overall": float("nan"),
-        "rmst": float("nan"),
-        "rmst_cond": float("nan"),
-    }
-    if onset.any():
-        t_, s_ = kaplan_meier(dur[onset], st[onset] == "recovered")
-        out["km_react"] = float(km_median(t_, s_))
-        out["rmst_cond"] = _rmst(t_, s_)
-    d_all = np.where(onset, dur, 0.0)
-    obs_all = (st == "recovered") | ~onset
-    t_, s_ = kaplan_meier(d_all, obs_all)
-    out["km_react_overall"] = float(km_median(t_, s_))
-    out["rmst"] = _rmst(t_, s_)
-    return out
-
-
-def summarize(records):
-    """Per (lead, information level, distortion, model) group: the REACT profile.
-
-    Relapse rates are over recovered events, within RELAPSE_WINDOW frames after recovery;
-    mean_I is over the onset-window frames (tested for every event)."""
-    groups = {}
-    for r in records:
-        groups.setdefault((r["lead"], r["info"], r.get("distortion", 0.0), r["model"]),
-                          []).append(r)
-    out = {}
-    for key, rs in groups.items():
-        onset = [r for r in rs if r["status"] in ("recovered", "censored")]
-        rec = [r for r in rs if r["status"] == "recovered"]
-        n_frames = sum(r["n"] for r in rs)
-        n_pre = sum(r["pre_n"] for r in rs)
-        n_I = sum(r["I_n"] for r in rs)
-        rs_h = [r for r in rs if r["status_H"] is not None]
-        under_h = {f"{k}_H": v for k, v in km_summary(rs_h, "_H").items()}
-        rec_h = [r for r in rs_h if r["status_H"] == "recovered"]
-        on0 = [r["onset"] for r in onset if r["onset"] is not None]
-
-        def share(xs, k):
-            return float(np.mean([r[k] for r in xs])) if xs else float("nan")
-
-        def med_after(xs, k):
-            v = [r[f"{k}_after"] for r in xs if r[k]]
-            return float(np.median(v)) if v else float("nan")
-
-        out[key] = {
-            "events": len(rs),
-            **km_summary(rs),
-            **under_h,
-            "median_onset": float(np.median(on0)) if on0 else float("nan"),
-            "relapse": share(rec, "relapse"),
-            "relapse_after_median": med_after(rec, "relapse"),
-            "relapse3": share(rec, "relapse3"),
-            "relapse3_after_median": med_after(rec, "relapse3"),
-            "relapse_H": share(rec_h, "relapse_H"),
-            "relapse3_H": share(rec_h, "relapse3_H"),
-            "margin_mean": sum(r["margin_mean"] * r["n"] for r in rs) / n_frames,
-            "margin_mean_H": sum(r["margin_mean_H"] * r["n"] for r in rs) / n_frames,
-            "mean_s_mixture": sum(r["s_mix_sum"] for r in rs) / n_frames,
-            "mean_s_gaussian": sum(r["s_sum"] for r in rs) / n_frames,
-            "mean_pre_s": sum(r["pre_s_sum"] for r in rs) / n_pre if n_pre else float("nan"),
-            "mean_I": sum(r["I_sum"] for r in rs) / n_I if n_I else float("nan"),
-        }
-    return out
-
-
-def select_info_level(summary, distortion: float, threshold: float = 0.95,
-                      model: str = "oracle_B"):
-    """The paper's rule for the headline information level (section 3.7): the lowest assumed
-    level at which Oracle B recovers on at least `threshold` of events at every lead evaluated
-    at that level.
-
-    summary: ReactResult.summary() (keys (lead, info, distortion, model)). distortion: the
-    target the rule is judged at (0.0 for d = infinity). The paper does not state it; on
-    Eindhoven the rule gives the published 4.2 nats at d = 0.1 m (3 nats at d = infinity).
-
-    Returns (level or None, {level: {lead: recovered share}})."""
-    shares: Dict[float, Dict[int, float]] = {}
-    for (lead, info, dist, m), row in summary.items():
-        if m == model and np.isclose(dist, distortion):
-            shares.setdefault(float(info), {})[int(lead)] = float(row["recovered"])
-    for info in sorted(shares):
-        if all(v >= threshold for v in shares[info].values()):
-            return info, shares
-    return None, shares
-
-
-@dataclass
-class ReactResult:
-    """Per-event REACT records and their summaries.
-
-    records: one dict per (lead, information level, distortion, model, event). summary():
-    one REACT profile per group: anticipation, censoring, recovery (Kaplan-Meier medians and
-    restricted means, over all events and given onset), relapse."""
-
-    records: List[Dict]
-    scorer: Optional[ReactScorer] = None
-    timing: Dict = field(default_factory=dict)
-
-    def summary(self) -> Dict[Tuple, Dict]:
-        return summarize(self.records)
-
-    def info_level(self, distortion: float, threshold: float = 0.95):
-        """select_info_level on this result's summary."""
-        return select_info_level(self.summary(), distortion, threshold)
-
-    def settings(self) -> Dict:
-        """The assumptions every number in this result carries."""
-        sc = self.scorer
-        if sc is None:
-            return {}
-        return {
-            "leads": list(sc.leads),
-            "info_levels": {str(k): [lv.info for lv in v] for k, v in sc.levels.items()},
-            "distortions_m": [None, *sc.distortions],
-            "decision_probability": sc.p,
-            "noise_floor": sc.noise_floor,
-            "onset_window": f"lead + {ONSET_MARGIN} frames",
-            "window_cap_frames": WINDOW_CAP,
-            "min_window_frames": MIN_WINDOW,
-        }
-
-    def to_json(self, path: str) -> None:
-        """Summary and settings as JSON (NaN written as null)."""
-        import json
-
-        def clean(v):
-            if isinstance(v, float) and not np.isfinite(v):
-                return None
-            if isinstance(v, (np.floating, np.integer)):
-                return clean(v.item())
-            if isinstance(v, dict):
-                return {str(k): clean(x) for k, x in v.items()}
-            if isinstance(v, (list, tuple)):
-                return [clean(x) for x in v]
-            return v
-
-        rows = [{"lead": k[0], "info": k[1], "distortion": k[2], "model": k[3], **v}
-                for k, v in self.summary().items()]
-        payload = {"schema": "reactmetric/0.2", "settings": self.settings(), "summary": rows}
-        if self.scorer is not None:
-            payload["calibration"] = {str(k): v for k, v in self.scorer.calibration.items()}
-        with open(path, "w") as f:
-            json.dump(clean(payload), f, indent=1)
-
-    def to_csv(self, path: str) -> None:
-        """Per-event records as CSV."""
-        import csv
-
-        if not self.records:
-            open(path, "w").close()
-            return
-        with open(path, "w", newline="") as f:
-            wr = csv.DictWriter(f, fieldnames=list(self.records[0].keys()))
-            wr.writeheader()
-            wr.writerows(self.records)
-
-    def to_dataframe(self):
-        import pandas as pd
-
-        return pd.DataFrame(self.records)
-
-    def table(self, lead=None, info=None, distortion=0.0):
-        """The summary as a DataFrame, optionally filtered."""
-        import pandas as pd
-
-        rows = [
-            {"lead": k[0], "info": k[1], "distortion": k[2], "model": k[3], **v}
-            for k, v in self.summary().items()
-        ]
-        df = pd.DataFrame(rows)
-        if lead is not None:
-            df = df[df["lead"] == lead]
-        if info is not None:
-            df = df[np.isclose(df["info"], info)]
-        if distortion is not None:
-            df = df[np.isclose(df["distortion"], distortion)]
-        return df.reset_index(drop=True)
+    return records, clock, errors

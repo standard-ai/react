@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from reactmetric.metric.survival import cluster_bootstrap_ci, kaplan_meier, km_median
+from reactmetric.metric.survival import kaplan_meier, km_median
 
 
 def test_km_no_censoring_is_ecdf_complement():
@@ -29,14 +29,13 @@ def test_km_median():
     assert km_median(times, surv) == 5.0
 
 
-class _M:
-    def __init__(self, id, v):
-        self.id = id
-        self.v = v
+def test_weighted_km_matches_kaplan_meier():
+    from reactmetric.results import _wkm
 
-
-def test_cluster_bootstrap_is_finite():
-    ms = [_M(i // 3, float(i % 3)) for i in range(30)]
-    lo, hi = cluster_bootstrap_ci(ms, lambda xs: float(np.mean([m.v for m in xs])), n_boot=200)
-    assert lo <= hi
-    assert np.isfinite(lo) and np.isfinite(hi)
+    rng = np.random.default_rng(0)
+    d = rng.integers(0, 40, 200).astype(float)
+    obs = rng.random(200) < 0.7
+    w = rng.integers(0, 3, 200)
+    t1, s1 = kaplan_meier(np.repeat(d, w), np.repeat(obs, w))
+    t2, s2 = _wkm(d, obs, w.astype(float))
+    assert np.allclose(t1, t2) and np.allclose(s1, s2)

@@ -1,5 +1,5 @@
-"""Survival summaries of REACT outcomes: Kaplan-Meier, medians, cluster bootstrap."""
+"""Survival summaries of REACT outcomes: Kaplan-Meier product-limit estimates and medians."""
 
-from .survival import cluster_bootstrap_ci, kaplan_meier, km_median
+from .survival import kaplan_meier, km_median
 
-__all__ = ["kaplan_meier", "km_median", "cluster_bootstrap_ci"]
+__all__ = ["kaplan_meier", "km_median"]
