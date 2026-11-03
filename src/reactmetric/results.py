@@ -308,6 +308,15 @@ def _interval(draws, level):
     return float(lo), float(hi)
 
 
+def _pandas():
+    try:
+        import pandas as pd
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("tables need pandas: pip install pandas (or 'reactmetric[viz]'); "
+                          "summary() and the records work without it") from e
+    return pd
+
+
 # ---------------------------------------------------------------------------
 # The result
 # ---------------------------------------------------------------------------
@@ -594,9 +603,7 @@ class ReactResult:
 
     def to_dataframe(self):
         """The per-event records as a DataFrame (needs pandas)."""
-        import pandas as pd
-
-        return pd.DataFrame(self.records)
+        return _pandas().DataFrame(self.records)
 
     def to_json(self, path: str, records: bool = True) -> None:
         """Settings, summary, diagnostics and (by default) the per-event records as JSON (NaN

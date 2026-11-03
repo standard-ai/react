@@ -51,7 +51,9 @@ class Linear:
 
 Multimodal models (Trajectron++, mixture density networks) should pass the mixture itself;
 REACT scores it as a mixture. Collapsing it to one Gaussian costs 0.4–0.8 nats per frame on
-pedestrian data, which is about the size of the effects REACT measures.
+pedestrian data, which is about the size of the effects REACT measures. For your own accuracy
+tables, `pred.nll_matrix(track.positions)` gives the mixture's negative log likelihood per
+(issue frame, lead).
 
 ```python
 rm.MixturePredictive(issue_frames, weights, component_means, component_covs)
