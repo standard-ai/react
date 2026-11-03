@@ -19,6 +19,11 @@ def test_trajectoryset_from_dataframe_roundtrip():
     assert ts[0].T == 20 and ts[0].D == 2
 
 
+def test_io_public_names():
+    assert rm.io.__all__ == ["Forecasts"]
+    assert not hasattr(rm.io, "forecasts_from_dataframe")
+
+
 def test_forecasts_from_dataframe_sigma_rho():
     rows = []
     for tid in range(2):

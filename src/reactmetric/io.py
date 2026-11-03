@@ -21,6 +21,8 @@ import numpy as np
 
 from .core.predictive import MixturePredictive, Predictive
 
+__all__ = ["Forecasts"]
+
 
 def _covs_from_sigma_rho(sx, sy, rho) -> np.ndarray:
     sx = np.asarray(sx, float)
@@ -34,7 +36,7 @@ def _covs_from_sigma_rho(sx, sy, rho) -> np.ndarray:
     return cov
 
 
-def forecasts_from_dataframe(
+def _forecasts_from_dataframe(
     df,
     id: str = "track_id",
     issue: str = "issue_frame",
@@ -87,7 +89,7 @@ def forecasts_from_dataframe(
 class Forecasts:
     """Namespace for forecast ingestion (mirrors rm.Predictive constructors)."""
 
-    from_dataframe = staticmethod(forecasts_from_dataframe)
+    from_dataframe = staticmethod(_forecasts_from_dataframe)
 
     @staticmethod
     def from_npz(path: str) -> Dict[object, Predictive]:
