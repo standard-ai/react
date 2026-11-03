@@ -19,7 +19,7 @@ from typing import Dict, Optional, Sequence
 
 import numpy as np
 
-from .core.predictive import Predictive
+from .core.predictive import MixturePredictive, Predictive
 
 
 def _covs_from_sigma_rho(sx, sy, rho) -> np.ndarray:
@@ -91,24 +91,61 @@ class Forecasts:
 
     @staticmethod
     def from_npz(path: str) -> Dict[object, Predictive]:
-        """Load forecasts from an .npz bundle with arrays keyed ``<id>__issue``,
-        ``<id>__means``, ``<id>__covs``."""
-        data = np.load(path, allow_pickle=True)
-        ids = {k.split("__")[0] for k in data.files}
-        out: Dict[object, Predictive] = {}
-        for tid in ids:
-            out[tid] = Predictive(
-                issue_frames=data[f"{tid}__issue"],
-                means=data[f"{tid}__means"],
-                covs=data[f"{tid}__covs"],
-            )
+        """Load forecasts written by ``to_npz``, keeping ids' int/str type and mixtures.
+
+        Files from 0.2 pre-releases (arrays keyed ``<id>__issue|means|covs``) still load,
+        with string ids and Gaussian forecasts.
+        """
+        with np.load(path, allow_pickle=False) as data:
+            if "__ids__" not in data.files:
+                return _from_legacy_npz(data)
+            out: Dict[object, Predictive] = {}
+            for k, (tid, kind) in enumerate(zip(data["__ids__"], data["__id_types__"])):
+                tid = int(tid) if kind == "int" else str(tid)
+                horizon = int(data[f"{k}__horizon"])
+                if f"{k}__weights" in data.files:
+                    out[tid] = MixturePredictive(
+                        data[f"{k}__issue"], data[f"{k}__weights"], data[f"{k}__means"],
+                        data[f"{k}__covs"], horizon=horizon,
+                    )
+                else:
+                    out[tid] = Predictive(
+                        data[f"{k}__issue"], data[f"{k}__means"], data[f"{k}__covs"],
+                        horizon=horizon,
+                    )
         return out
 
     @staticmethod
     def to_npz(forecasts: Dict[object, Predictive], path: str) -> None:
-        bundle = {}
-        for tid, pred in forecasts.items():
-            bundle[f"{tid}__issue"] = pred.issue_frames
-            bundle[f"{tid}__means"] = pred.means
-            bundle[f"{tid}__covs"] = pred.covs
+        """Write forecasts to one .npz; ids must be ints or strings. A MixturePredictive is
+        stored as its weights and components, so it reads back as the same mixture."""
+        ids, kinds, bundle = [], [], {}
+        for k, (tid, pred) in enumerate(forecasts.items()):
+            if isinstance(tid, (int, np.integer)) and not isinstance(tid, bool):
+                kinds.append("int")
+            elif isinstance(tid, str):
+                kinds.append("str")
+            else:
+                raise TypeError(f"to_npz needs int or str track ids; got {type(tid).__name__}")
+            ids.append(str(tid))
+            bundle[f"{k}__issue"] = pred.issue_frames
+            bundle[f"{k}__horizon"] = np.int64(pred.horizon)
+            if isinstance(pred, MixturePredictive):
+                bundle[f"{k}__weights"] = pred.weights
+                bundle[f"{k}__means"] = pred.component_means
+                bundle[f"{k}__covs"] = pred.component_covs
+            else:
+                bundle[f"{k}__means"] = pred.means
+                bundle[f"{k}__covs"] = pred.covs
+        bundle["__ids__"] = np.array(ids, dtype=str)
+        bundle["__id_types__"] = np.array(kinds, dtype=str)
         np.savez(path, **bundle)
+
+
+def _from_legacy_npz(data) -> Dict[object, Predictive]:
+    """Pre-release layout: arrays keyed ``<id>__issue|means|covs``, ids as strings."""
+    ids = sorted({k.rsplit("__", 1)[0] for k in data.files})
+    return {
+        tid: Predictive(data[f"{tid}__issue"], data[f"{tid}__means"], data[f"{tid}__covs"])
+        for tid in ids
+    }

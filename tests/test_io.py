@@ -57,6 +57,34 @@ def test_forecasts_npz_roundtrip(tmp_path):
     path = str(tmp_path / "f.npz")
     rm.Forecasts.to_npz(fc, path)
     loaded = rm.Forecasts.from_npz(path)
-    assert "7" in loaded
-    np.testing.assert_array_equal(loaded["7"].means, means)
+    assert list(loaded) == [7]
+    np.testing.assert_array_equal(loaded[7].means, means)
+
+
+def test_forecasts_npz_keeps_mixtures_and_ids(tmp_path):
+    rng = np.random.default_rng(0)
+    n, h, j = 4, 3, 2
+    mix = rm.MixturePredictive(
+        np.arange(n), rng.dirichlet(np.ones(j), size=n), rng.normal(size=(n, h, j, 2)),
+        np.tile(np.eye(2), (n, h, j, 1, 1)) * 0.3,
+    )
+    gauss = rm.Predictive(np.arange(n), np.zeros((n, h, 2)), np.tile(np.eye(2), (n, h, 1, 1)))
+    fc = {3: mix, "a__b": gauss, "3": gauss}
+    path = str(tmp_path / "f.npz")
+    rm.Forecasts.to_npz(fc, path)
+    loaded = rm.Forecasts.from_npz(path)
+    assert list(loaded) == [3, "a__b", "3"]
+    assert isinstance(loaded[3], rm.MixturePredictive)
+    for key in ("weights", "means", "covs"):
+        np.testing.assert_array_equal(loaded[3].mix[key], mix.mix[key])
+    assert type(loaded["a__b"]) is rm.Predictive
+    np.testing.assert_array_equal(loaded["a__b"].covs, gauss.covs)
+
+
+def test_forecasts_npz_reads_legacy_layout(tmp_path):
+    path = str(tmp_path / "old.npz")
+    np.savez(path, **{"7__issue": np.arange(2), "7__means": np.zeros((2, 3, 2)),
+                      "7__covs": np.tile(np.eye(2), (2, 3, 1, 1))})
+    loaded = rm.Forecasts.from_npz(path)
+    assert list(loaded) == ["7"] and loaded["7"].horizon == 3
 
