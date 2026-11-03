@@ -53,6 +53,28 @@ def test_unified_load_uses_eindhoven_mapping(tmp_path):
     assert ts.dt == pytest.approx(0.1)
 
 
+@pytest.mark.parametrize("ext", ["parquet", "csv"])
+def test_load_eindhoven_max_tracks_filters_short_tracks_first(tmp_path, ext):
+    pd = pytest.importorskip("pandas")
+    if ext == "parquet":
+        pytest.importorskip("pyarrow")
+    # rows in time order, ids interleaved; odd ids are too short to keep
+    rows = [{"time_ms": 100 * t, "object_identifier": pid,
+             "x_position_mm": 1000.0 * pid + t, "y_position_mm": 0.0}
+            for t in range(25) for pid in range(1, 11) if pid % 2 == 0 or t < 10]
+    path = str(tmp_path / f"shard.{ext}")
+    df = pd.DataFrame(rows)
+    df.to_parquet(path) if ext == "parquet" else df.to_csv(path, index=False)
+
+    first = rm.datasets.load_eindhoven(path=path, max_tracks=3)
+    assert sorted(first.ids) == [2, 4, 6]
+    assert all(t.T == 25 for t in first)
+    picked = rm.datasets.load_eindhoven(path=path, max_tracks=3, seed=1)
+    assert len(picked) == 3 and all(tid % 2 == 0 for tid in picked.ids)
+    again = rm.datasets.load_eindhoven(path=path, max_tracks=3, seed=1)
+    assert sorted(again.ids) == sorted(picked.ids)
+
+
 def test_specify_mapping_updates_registry_and_yaml(tmp_path):
     yaml_path = tmp_path / "custom.yaml"
     m = rm.datasets.specify_mapping(

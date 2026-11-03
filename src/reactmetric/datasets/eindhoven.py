@@ -31,6 +31,7 @@ from typing import Dict, Optional, Sequence
 import numpy as np
 
 from ..core.trajectory import Trajectory, TrajectorySet
+from .load import _pick_ids
 from .mapping import mappings
 
 ZENODO_RECORD_ID = 13784588
@@ -150,14 +151,26 @@ def _from_rows(rows: Sequence[Dict[str, float]], min_length: int, dt: float) -> 
     return TrajectorySet(tracks)
 
 
+def _batch_columns(batch, names) -> Dict[str, np.ndarray]:
+    return {
+        c: batch.column(batch.schema.get_field_index(c)).to_numpy(zero_copy_only=False)
+        for c in names
+    }
+
+
 def _load_limited_parquet(
     path: str,
     max_tracks: int,
     min_length: int,
     dt: float,
+    seed: Optional[int] = None,
     batch_size: int = 100_000,
 ) -> TrajectorySet:
-    """Stream a large Eindhoven parquet shard while keeping only max_tracks IDs."""
+    """Up to max_tracks tracks of >= min_length frames from a large parquet shard, streamed.
+
+    Two passes keep memory bounded: count rows per id (id column only), pick among the
+    eligible ids (``_pick_ids``), then collect just those ids' rows.
+    """
     try:
         import pyarrow.parquet as pq
     except ImportError as e:
@@ -176,41 +189,25 @@ def _load_limited_parquet(
     if missing:
         raise ValueError(f"Eindhoven parquet missing columns: {sorted(missing)}")
 
-    selected = set()
+    counts: Dict[int, int] = {}
+    for batch in parquet.iter_batches(batch_size=batch_size, columns=[id_col]):
+        ids, n = np.unique(_batch_columns(batch, [id_col])[id_col], return_counts=True)
+        for tid, c in zip(ids.tolist(), n.tolist()):
+            counts[int(tid)] = counts.get(int(tid), 0) + c
+    selected = _pick_ids([t for t, c in counts.items() if c >= min_length], max_tracks, seed)
+    wanted = np.array(selected, dtype=np.int64)
+    remaining = sum(counts[t] for t in selected)
+
     rows = []
-    empty_after_selection = 0
     for batch in parquet.iter_batches(batch_size=batch_size, columns=cols):
-        table = batch.to_pydict()
-        ids = table[id_col]
-        for tid in ids:
-            if len(selected) >= max_tracks:
-                break
-            selected.add(int(tid))
-        if not selected:
-            continue
-        times = table[time_col]
-        xs = table[x_col]
-        ys = table[y_col]
-        kept = 0
-        for i, tid in enumerate(ids):
-            tid = int(tid)
-            if tid in selected:
-                kept += 1
-                rows.append(
-                    {
-                        time_col: times[i],
-                        id_col: tid,
-                        x_col: xs[i],
-                        y_col: ys[i],
-                    }
-                )
-        if len(selected) >= max_tracks:
-            if kept == 0:
-                empty_after_selection += 1
-            else:
-                empty_after_selection = 0
-            if empty_after_selection >= 1:
-                break
+        if remaining <= 0:
+            break
+        table = _batch_columns(batch, cols)
+        keep = np.isin(table[id_col], wanted)
+        if keep.any():
+            kept = [table[c][keep].tolist() for c in cols]
+            rows.extend(dict(zip(cols, values)) for values in zip(*kept))
+            remaining -= int(keep.sum())
     return _from_rows(rows, min_length=min_length, dt=dt)
 
 
@@ -240,6 +237,7 @@ def load_eindhoven(
     min_length: Optional[int] = None,
     max_tracks: Optional[int] = None,
     dt: Optional[float] = None,
+    seed: Optional[int] = None,
 ) -> TrajectorySet:
     """Load Eindhoven Centraal trajectories from a parquet/CSV file or the download cache.
 
@@ -253,8 +251,11 @@ def load_eindhoven(
         download: If True, fetch the requested shard from Zenodo when absent; if False
             and it is not cached, raise FileNotFoundError.
         min_length: Drop trajectories shorter than this many frames.
-        max_tracks: Optional cap after loading, useful for quick demos.
+        max_tracks: Optional cap on the number of tracks, applied after the min_length
+            filter (a parquet shard is streamed, never loaded whole).
         dt: Expected nominal frame interval (10 Hz = 0.1s).
+        seed: With ``max_tracks``, None keeps the first eligible tracks in id order; an int
+            picks eligible tracks at random with that seed.
 
     Returns:
         TrajectorySet with positions in meters and ids from the mapping id column.
@@ -280,7 +281,9 @@ def load_eindhoven(
         # Prefer the unified mapping-driven loader for ordinary CSV.
         from .load import load as load_mapped
 
-        data = load_mapped(path, mapping, max_tracks=max_tracks, dt=dt, min_length=min_length)
+        data = load_mapped(
+            path, mapping, max_tracks=max_tracks, dt=dt, min_length=min_length, seed=seed
+        )
         return data
     elif max_tracks is not None:
         data = _load_limited_parquet(
@@ -288,6 +291,7 @@ def load_eindhoven(
             max_tracks=max_tracks,
             min_length=min_length,
             dt=dt,
+            seed=seed,
         )
     else:
         try:
@@ -311,7 +315,4 @@ def load_eindhoven(
             raise ValueError(f"Eindhoven parquet missing columns: {sorted(missing)}")
         rows = df[cols].to_dict("records")
         data = _from_rows(rows, min_length=min_length, dt=dt)
-
-    if max_tracks is not None and len(data) > max_tracks:
-        data = TrajectorySet({tid: data[tid] for tid in data.ids[:max_tracks]})
     return data

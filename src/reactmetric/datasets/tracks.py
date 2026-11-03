@@ -88,6 +88,7 @@ def load_tracks(
     max_tracks: Optional[int] = None,
     dt: Optional[float] = None,
     min_length: Optional[int] = None,
+    seed: Optional[int] = None,
 ) -> TrajectorySet:
     """Load Standard AI Tracks from a local CSV/parquet table.
 
@@ -98,8 +99,10 @@ def load_tracks(
             directory ``path`` (e.g. ``\"eval\"`` -> ``eval.parquet``). Not
             required; a single unpartitioned file is the default path.
         use_3d: Keep z via the mapping's ``coords_3d`` extras.
-        max_tracks: Optional track cap.
+        max_tracks: Optional track cap, applied after the min_length filter.
         dt / min_length: Optional overrides of the registered tracks mapping.
+        seed: With ``max_tracks``, None keeps the first tracks in id order; an int picks
+            them at random with that seed.
     """
     resolved = _resolve_tracks_path(path=path, root=root, dataset_split=dataset_split)
     mapping = mappings.tracks
@@ -110,6 +113,7 @@ def load_tracks(
         dt=dt,
         min_length=min_length if min_length is not None else mapping.min_length,
         use_3d=use_3d,
+        seed=seed,
     )
 
 

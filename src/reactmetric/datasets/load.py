@@ -11,6 +11,28 @@ from ..core.trajectory import Trajectory, TrajectorySet
 from .mapping import DatasetMapping, MappingLike, mappings
 
 
+def _pick_ids(ids, max_tracks: Optional[int], seed: Optional[int] = None) -> list:
+    """Up to ``max_tracks`` of ``ids``: the first in id order (seed None) or a seeded random
+    pick (returned in id order)."""
+    try:
+        ids = sorted(ids)
+    except TypeError:  # mixed id types: keep the given order
+        ids = list(ids)
+    if max_tracks is None or len(ids) <= max_tracks:
+        return ids
+    if seed is None:
+        return ids[:max_tracks]
+    pick = np.random.default_rng(seed).choice(len(ids), size=max_tracks, replace=False)
+    return [ids[i] for i in np.sort(pick)]
+
+
+def _cap_tracks(data: TrajectorySet, max_tracks: Optional[int], seed: Optional[int] = None):
+    """``data`` limited to ``_pick_ids`` of its ids; apply after the min_length filter."""
+    if max_tracks is None or len(data) <= max_tracks:
+        return data
+    return TrajectorySet({tid: data[tid] for tid in _pick_ids(data.ids, max_tracks, seed)})
+
+
 def _read_table(path: str, columns=None):
     try:
         import pandas as pd
@@ -108,6 +130,7 @@ def load(
     dt: Optional[float] = None,
     min_length: Optional[int] = None,
     use_3d: bool = False,
+    seed: Optional[int] = None,
 ) -> TrajectorySet:
     """Load a local trajectory file using an explicit DatasetMapping.
 
@@ -115,7 +138,10 @@ def load(
         path: Local CSV/parquet path, or ETH/UCY whitespace text file.
         mapping: Registry name (``\"eindhoven\"``, ``\"tracks\"``, ...), a
             :class:`DatasetMapping`, or a dict with the same fields.
-        max_tracks: Optional cap on number of tracks retained.
+        max_tracks: Optional cap on the number of tracks, applied after dropping tracks
+            shorter than ``min_length``.
+        seed: With ``max_tracks``, None keeps the first tracks in id order; an int picks
+            them at random with that seed.
         dt / min_length: Optional overrides of mapping fields for this load only.
         use_3d: For the ``tracks`` mapping, switch to the 3D coordinate triple
             stored in ``mapping.extras['coords_3d']``.
@@ -159,9 +185,7 @@ def load(
         df = _apply_scales(df[ordered], resolved)
         data = _from_scaled_dataframe(df, resolved)
 
-    if max_tracks is not None and len(data) > max_tracks:
-        data = TrajectorySet({tid: data[tid] for tid in data.ids[:max_tracks]})
-    return data
+    return _cap_tracks(data, max_tracks, seed)
 
 
 def load_dataset(
