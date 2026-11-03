@@ -28,6 +28,9 @@ def test_eindhoven_sample_loads_and_has_schema():
     assert "10.5281/zenodo.13784588" in rm.datasets.eindhoven_citation()
     assert rm.datasets.mappings.eindhoven.id == "object_identifier"
     assert rm.datasets.mappings.eindhoven.position_scale == 1e-3
+    # one name for the sample: load_dataset has no alias for it
+    with pytest.raises(ValueError, match="load_eindhoven_sample"):
+        rm.datasets.load_dataset("eindhoven-sample")
 
 
 def test_load_eindhoven_without_cache_or_download_raises(tmp_path):

@@ -202,17 +202,9 @@ def load_dataset(
     Tracks local file, ETH/UCY scene resolution) while keeping mappings as the
     single place column/unit assumptions live.
     """
-    if name in {"eindhoven", "eindhoven-sample"}:
+    if name == "eindhoven":
         from . import eindhoven as eh
 
-        if name == "eindhoven-sample":
-            data = eh.load_eindhoven_sample(
-                min_length=mappings.eindhoven.min_length,
-                dt=dt or mappings.eindhoven.dt,
-            )
-            if max_tracks is not None and len(data) > max_tracks:
-                data = TrajectorySet({tid: data[tid] for tid in data.ids[:max_tracks]})
-            return data
         return eh.load_eindhoven(
             path=path,
             max_tracks=max_tracks,
@@ -255,6 +247,6 @@ def load_dataset(
             data = TrajectorySet({tid: data[tid] for tid in data.ids[:max_tracks]})
         return data
     raise ValueError(
-        f"unknown dataset {name!r}; choose from eindhoven, eindhoven-sample, "
-        "tracks, ethucy, synthetic — or call load(path, mapping=...)"
+        f"unknown dataset {name!r}; choose from eindhoven, tracks, ethucy, synthetic — "
+        "or call load(path, mapping=...); the bundled sample is load_eindhoven_sample()"
     )
