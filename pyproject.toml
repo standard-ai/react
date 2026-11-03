@@ -96,7 +96,7 @@ exclude = [
   "/docs/react-spec.md",
   "/docs/recovery-rule.md",
   "/tests/parity",
-  "/examples/react_tutorial",
+  "/examples/react_tutorial/**",
   "__pycache__",
 ]
 
