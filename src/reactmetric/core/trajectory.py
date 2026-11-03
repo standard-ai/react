@@ -135,13 +135,14 @@ class TrajectorySet:
         return 0
 
     def split(
-        self, fraction: float = 0.2, seed: int = 0
+        self, fraction: float = 0.3, seed: int = 0
     ) -> Tuple[TrajectorySet, TrajectorySet]:
         """Seeded split into (calibration, evaluation) by track.
 
-        The first ``fraction`` of a shuffled id list becomes the calibration
-        set (for fitting references / steady-state thresholds); the rest is the
-        evaluation set. Splitting by track keeps events within a track together.
+        The first ``fraction`` (default 0.3, as in the paper and the CLI) of a shuffled id
+        list becomes the calibration set (for fitting references / steady-state thresholds);
+        the rest is the evaluation set. Splitting by track keeps events within a track
+        together.
         """
         rng = np.random.default_rng(seed)
         ids = np.array(self.ids, dtype=object)

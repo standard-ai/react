@@ -22,6 +22,8 @@ def test_trajectoryset_split_disjoint():
     a, b = ts.split(0.3, seed=0)
     assert len(a) == 3 and len(b) == 7
     assert set(a.ids).isdisjoint(b.ids)
+    c, _ = ts.split(seed=0)  # default fraction is the paper's 0.3
+    assert c.ids == a.ids
 
 
 def test_predictive_from_samples_moment():
