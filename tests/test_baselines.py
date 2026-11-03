@@ -21,6 +21,15 @@ def test_baselines_produce_valid_predictives(synthetic):
         assert np.isfinite(nll[~np.isnan(nll)]).all()
 
 
+@pytest.mark.parametrize("cls", [CTRV, IMM])
+def test_ctrv_imm_need_history_of_four(cls):
+    # both initialise from observation 3, which a forecast issued before frame 3 must not see
+    with pytest.raises(ValueError, match="history >= 4"):
+        cls(history=3)
+    pos = np.cumsum(np.tile([0.1, 0.05], (40, 1)), axis=0)
+    assert cls(history=4).predict(rm.Trajectory(pos, dt=0.1, id=0)).issue_frames[0] == 3
+
+
 def test_cv_covariance_grows_with_lead(synthetic):
     traj = synthetic["test"][synthetic["test"].ids[0]]
     pred = ConstantVelocity().predict(traj)

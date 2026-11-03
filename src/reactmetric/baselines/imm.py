@@ -66,6 +66,23 @@ def _stop_F(velocity_decay: float) -> np.ndarray:
 
 
 class IMM(BaseForecaster):
+    """Interacting Multiple Model filter over stop / constant-velocity / turn modes, 2D only.
+
+    Forecasts are issued at frames ``history - 1`` .. ``T - horizon - 1`` for leads
+    1..``horizon`` (default 15), each the mode mixture moment-matched to one Gaussian; leads
+    beyond the horizon are not forecast, and tracks shorter than ``history + horizon`` get
+    none. ``fit`` sets the parameters below by maximum likelihood on one-step innovations.
+    The filter initialises its velocity from observations 0 and 3, so ``history`` must be at
+    least 4.
+
+    Parameters: ``modes`` (any of "stop", "cv", "turn_left", "turn_right"); ``turn_rate``
+    (rad/s, +/- for the turn modes); ``sigma_a_cv`` / ``sigma_a_ct`` / ``sigma_a_stop``
+    (white-acceleration process noise per mode, m/s^2); ``stop_velocity_decay`` (per-frame
+    velocity factor in the stop mode); ``p_stay`` (per-frame probability of staying in a
+    mode; ``p_stay_stop`` overrides it for the stop mode); ``measurement_noise`` (per-axis
+    position std, m; ``measurement_noise_stop`` overrides it for the stop mode).
+    """
+
     def __init__(
         self,
         calibration: Optional[CalibratedNoise] = None,
@@ -83,6 +100,9 @@ class IMM(BaseForecaster):
         p_stay_stop: Optional[float] = None,
         name: str = "IMM",
     ):
+        if int(history) < 4:
+            # initialised from observation 3: a shorter history would see the future
+            raise ValueError(f"IMM needs history >= 4; got {history}")
         if measurement_noise is None:
             measurement_noise = calibration.measurement_noise if calibration else 0.05
         self.measurement_noise = float(measurement_noise)

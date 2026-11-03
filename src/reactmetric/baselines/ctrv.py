@@ -43,6 +43,16 @@ def _jacobian(state: np.ndarray, dt: float, eps: float = 1e-5) -> np.ndarray:
 
 
 class CTRV(BaseForecaster):
+    """Constant turn rate and velocity extended Kalman filter, 2D only (None otherwise).
+
+    Forecasts are issued at frames ``history - 1`` .. ``T - horizon - 1`` for leads
+    1..``horizon`` (default 15); leads beyond the horizon are not forecast, and tracks shorter
+    than ``history + horizon`` get none. There is no ``fit``: the process noise
+    (``sigma_a``, ``sigma_yaw``), the covariance scale ``temperature`` and
+    ``measurement_noise`` are fixed at construction. The filter initialises its velocity from
+    observations 0 and 3, so ``history`` must be at least 4.
+    """
+
     def __init__(
         self,
         calibration: Optional[CalibratedNoise] = None,
@@ -54,6 +64,9 @@ class CTRV(BaseForecaster):
         temperature: float = 1.0,    # covariance scale (kept explicit, never auto-tuned)
         name: str = "CTRV",
     ):
+        if int(history) < 4:
+            # initialised from observation 3: a shorter history would see the future
+            raise ValueError(f"CTRV needs history >= 4; got {history}")
         if measurement_noise is None:
             measurement_noise = calibration.measurement_noise if calibration else 0.05
         self.measurement_noise = float(measurement_noise)

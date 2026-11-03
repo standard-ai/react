@@ -69,6 +69,16 @@ def _filter_states(obs: np.ndarray, dt: float, gains: np.ndarray):
 
 
 class ConstantVelocity(BaseForecaster):
+    """Constant-velocity Kalman filter (persistence baseline), any dimension D.
+
+    Forecasts are issued at frames ``history - 1`` .. ``T - horizon - 1`` for leads
+    1..``horizon`` (default 15), each a Gaussian from the filter's propagated covariance plus
+    measurement noise; leads beyond the horizon are not forecast, and tracks shorter than
+    ``history + horizon`` get none. ``fit`` estimates ``accel_noise`` and
+    ``measurement_noise`` by maximum likelihood on one-step innovations; the constructor
+    takes them as given.
+    """
+
     def __init__(
         self,
         history: int = 10,
