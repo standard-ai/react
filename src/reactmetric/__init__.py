@@ -19,7 +19,7 @@ recovered within the window, and whether the recovery held:
 
 from __future__ import annotations
 
-from . import baselines, constants, datasets, events, forecasters, information, reference, scoring
+from . import baselines, constants, datasets, events, forecasters, information, reference
 from .benchmark import benchmark
 from .core import MixturePredictive, Predictive, Trajectory, TrajectorySet
 from .io import Forecasts
@@ -48,7 +48,6 @@ __all__ = [
     "forecasters",
     "information",
     "reference",
-    "scoring",
 ]
 
 

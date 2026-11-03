@@ -26,7 +26,7 @@ rm.datasets.specify_mapping(
 
 ```python
 # Named defaults (mapping already registered)
-data = rm.datasets.load_dataset("eindhoven-sample")
+data = rm.datasets.load_eindhoven_sample()           # the bundled 40-track excerpt
 data = rm.datasets.load_eindhoven(download=True, days="01_10")
 
 # Any local table through the same mapping-driven path
