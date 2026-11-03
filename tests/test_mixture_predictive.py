@@ -50,6 +50,16 @@ def test_one_component_equals_gaussian():
     assert np.array_equal(t, g.at_lead(2)[0]) and w.shape == (5, 1) and mu.shape == (5, 1, 2)
 
 
+def test_nll_is_nan_for_targets_before_the_track():
+    """Issue frame -3 targets frames -2..0 at leads 1..3; only frame 0 exists."""
+    g = Predictive(np.array([-3, 0]), np.zeros((2, 3, 2)), np.tile(np.eye(2), (2, 3, 1, 1)))
+    m = MixturePredictive(g.issue_frames, np.ones((2, 1)), g.means[:, :, None], g.covs[:, :, None])
+    obs = np.random.default_rng(3).normal(size=(10, 2))
+    for pred in (g, m):
+        nll = pred.nll_matrix(obs)
+        assert np.isnan(nll[0, :2]).all() and np.isfinite(nll[0, 2]) and np.isfinite(nll[1]).all()
+
+
 def test_bad_shapes_raise():
     with pytest.raises(ValueError):
         MixturePredictive(

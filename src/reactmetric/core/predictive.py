@@ -139,15 +139,15 @@ class Predictive:
     def nll_matrix(self, observations: np.ndarray) -> np.ndarray:
         """Per-(issue, step) Gaussian NLL of the realized observations, (n, H).
 
-        NaN where the target frame is beyond the track or the covariance is not
-        positive-definite.
+        NaN where the target frame is outside the track (before frame 0 or past its end)
+        or the covariance is not positive-definite.
         """
         observations = np.asarray(observations, dtype=float)
         n, hh, dim = self.means.shape
         t = len(observations)
         targets = self.issue_frames[:, None] + np.arange(1, hh + 1)[None, :]
-        valid = targets < t
-        targets_clipped = np.minimum(targets, t - 1)
+        valid = (targets >= 0) & (targets < t)
+        targets_clipped = np.clip(targets, 0, t - 1)
         diff = observations[targets_clipped] - self.means              # (n, H, D)
         flat_resid = diff.reshape(-1, dim)
         flat_cov = self.covs.reshape(-1, dim, dim)
@@ -225,14 +225,14 @@ class MixturePredictive(Predictive):
                 "means": self.component_means, "covs": self.component_covs}
 
     def nll_matrix(self, observations: np.ndarray) -> np.ndarray:
-        """Per-(issue, step) mixture NLL of the realized observations, (n, H); NaN past the
-        track's end."""
+        """Per-(issue, step) mixture NLL of the realized observations, (n, H); NaN where the
+        target frame is outside the track."""
         observations = np.asarray(observations, dtype=float)
         n, hh, J, dim = self.component_means.shape
         t = len(observations)
         targets = self.issue_frames[:, None] + np.arange(1, hh + 1)[None, :]
-        valid = targets < t
-        y = observations[np.minimum(targets, t - 1)]                     # (n, H, D)
+        valid = (targets >= 0) & (targets < t)
+        y = observations[np.clip(targets, 0, t - 1)]                     # (n, H, D)
         diff = (y[:, :, None, :] - self.component_means).reshape(-1, dim)
         comp = -gaussian_nll(diff, self.component_covs.reshape(-1, dim, dim)).reshape(n, hh, J)
         w = self.weights if self.weights.ndim == 3 else self.weights[:, None, :]
