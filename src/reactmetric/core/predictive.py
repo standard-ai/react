@@ -84,37 +84,19 @@ class Predictive:
         issue_frames: np.ndarray,
         samples: np.ndarray,
         weights: Optional[np.ndarray] = None,
-        method: str = "moment",
     ) -> Predictive:
-        """Build a Gaussian predictive from samples (n, H, S, D).
+        """One Gaussian per (issue, lead), moment-matched to samples (n, H, S, D).
 
-        ``method='moment'`` moment-matches each (issue, lead) sample cloud to a
-        Gaussian. ``method='kde'`` adds a Silverman-rule bandwidth to the
-        covariance, i.e. a kernel-smoothed (and slightly more conservative)
-        density. ``weights`` (n, H, S) optionally weights samples (e.g. mode
-        probabilities for K-trajectory forecasts).
-        """
+        weights (n, S) or (n, H, S) optionally weight the samples (e.g. mode probabilities).
+        This discards multimodality; MixturePredictive.from_samples keeps it."""
         samples = np.asarray(samples, dtype=float)
         if samples.ndim != 4:
             raise ValueError(f"samples must be (n, H, S, D); got {samples.shape}")
         n, h, s, dim = samples.shape
-        if weights is None:
-            w = np.full((n, h, s), 1.0 / s)
-        else:
-            w = np.asarray(weights, dtype=float)
-            w = w / np.clip(w.sum(axis=2, keepdims=True), 1e-12, None)
+        w = _sample_weights(weights, n, h, s)
         means = np.einsum("nhs,nhsd->nhd", w, samples)
         diff = samples - means[:, :, None, :]
         covs = np.einsum("nhs,nhsd,nhse->nhde", w, diff, diff)
-        if method == "kde":
-            # Silverman bandwidth factor per effective sample size, isotropic.
-            factor = (4.0 / (dim + 2.0)) ** (1.0 / (dim + 4.0)) * s ** (-1.0 / (dim + 4.0))
-            idx = np.arange(dim)
-            var_diag = covs[:, :, idx, idx]
-            covs = covs.copy()
-            covs[:, :, idx, idx] = var_diag * (1.0 + factor**2)
-        elif method != "moment":
-            raise ValueError(f"unknown from_samples method '{method}'")
         return cls(issue_frames, means, covs)
 
     # ---- properties -------------------------------------------------------
@@ -218,6 +200,31 @@ class MixturePredictive(Predictive):
         return (self.issue_frames + h, w, self.component_means[:, h - 1],
                 self.component_covs[:, h - 1])
 
+    @classmethod
+    def from_samples(cls, issue_frames, samples, weights=None, bandwidth=None):
+        """A kernel density over sampled trajectories (n, H, S, D): one isotropic Gaussian
+        kernel per sample, so the forecast keeps its modes.
+
+        bandwidth: the kernel's standard deviation (m), a scalar or one per lead (H,); None:
+        Scott's rule per (issue, lead), sd * S^(-1/(D+4)). REACT scores the density, so the
+        bandwidth matters: SampleForecaster.fit chooses it by log score on calibration
+        tracks. weights (n, S) or (n, H, S) weight the samples (e.g. mode probabilities)."""
+        samples = np.asarray(samples, dtype=float)
+        if samples.ndim != 4:
+            raise ValueError(f"samples must be (n, H, S, D); got {samples.shape}")
+        n, h, s, dim = samples.shape
+        w = _sample_weights(weights, n, h, s)
+        if bandwidth is None:
+            mean = np.einsum("nhs,nhsd->nhd", w, samples)
+            var = np.einsum("nhs,nhsd->nh", w, (samples - mean[:, :, None]) ** 2) / dim
+            bw = np.sqrt(var) * s ** (-1.0 / (dim + 4.0))
+        else:
+            bw = np.broadcast_to(np.asarray(bandwidth, float).reshape(-1)[None, :]
+                                 if np.ndim(bandwidth) else float(bandwidth), (n, h))
+        bw = np.maximum(bw, 1e-4)
+        covs = (bw**2)[:, :, None, None, None] * np.eye(dim)
+        return cls(issue_frames, w, samples, np.broadcast_to(covs, (n, h, s, dim, dim)).copy())
+
     @property
     def mix(self):
         """The raw arrays as a dict (issue_frames, weights, means, covs)."""
@@ -241,3 +248,13 @@ class MixturePredictive(Predictive):
         peak = lp.max(-1, keepdims=True)
         ll = (peak + np.log(np.exp(lp - peak).sum(-1, keepdims=True)))[..., 0]
         return np.where(valid, -ll, np.nan)
+
+
+def _sample_weights(weights, n, h, s):
+    """Sample weights as (n, H, S), normalized per (issue, lead)."""
+    if weights is None:
+        return np.full((n, h, s), 1.0 / s)
+    w = np.asarray(weights, dtype=float)
+    if w.ndim == 2:
+        w = np.broadcast_to(w[:, None, :], (n, h, s))
+    return w / np.clip(w.sum(axis=2, keepdims=True), 1e-12, None)

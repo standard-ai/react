@@ -34,7 +34,7 @@ def test_trajectoryset_split_disjoint():
 def test_predictive_from_samples_moment():
     rng = np.random.default_rng(0)
     samples = rng.normal(size=(4, 3, 5000, 2))
-    pred = Predictive.from_samples(np.arange(4), samples, method="moment")
+    pred = Predictive.from_samples(np.arange(4), samples)
     assert pred.means.shape == (4, 3, 2)
     assert pred.covs.shape == (4, 3, 2, 2)
     np.testing.assert_allclose(pred.means, 0.0, atol=0.1)

@@ -25,6 +25,7 @@ from .core import MixturePredictive, Predictive, Trajectory, TrajectorySet
 from .io import Forecasts
 from .metric import kaplan_meier, km_median
 from .results import ReactResult, select_info_level
+from .samples import SampleForecaster
 from .scorer import ReactScorer
 
 __version__ = "0.2.0.dev0"
@@ -36,6 +37,7 @@ __all__ = [
     "MixturePredictive",
     "Forecasts",
     "ReactScorer",
+    "SampleForecaster",
     "ReactResult",
     "benchmark",
     "select_info_level",

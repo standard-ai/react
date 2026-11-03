@@ -13,7 +13,7 @@ def parse_args(doc: str):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracks", type=int, default=400,
                     help="Eindhoven tracks to load (first use downloads a ~860 MB Zenodo shard)")
-    ap.add_argument("--sample", action="store_true", help="use the bundled 36-track sample instead")
+    ap.add_argument("--sample", action="store_true", help="use the bundled 40-track sample instead")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--out", default="integration_out")
     return ap.parse_args()
@@ -34,9 +34,8 @@ def fit_scorer(calib, args):
 
 
 def report(result, models):
-    cols = ["model", "events", "anticipation", "km_react", "censored", "relapse3", "mean_s_mixture"]
-    for d in (0.0, 0.1):
+    for d in (None, 0.1):
         print(f"\n{rm.viz.react_label(10, d, 4.2)}")
-        tb = result.table(lead=10, info=4.2, distortion=d)
-        tb = tb[tb["model"].isin(list(models) + ["oracle_B"])][cols]
+        tb = result.table(lead=10, distortion=d, model=list(models) + ["oracle_B"])
+        tb = tb.drop(columns=["lead", "info", "distortion"])
         print(tb.to_string(index=False, float_format=lambda x: f"{x:.2f}"))
