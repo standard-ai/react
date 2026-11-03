@@ -22,7 +22,7 @@ This matches Argoverse 2 / `trajdata`-style inputs, so existing dataset loaders 
 
 The issue frame is the **last observed frame**, the convention of ETH/UCY, Argoverse, nuScenes, trajdata and Trajectron++. A forecast issued at frame `t` may use observations up to and including `t`, and its lead-`h` row predicts the position at frame `t + h`. REACT checks nothing about causality for you: a forecast that peeks at frame `t + 1` will look better than it is.
 
-REACT needs a forecast issued at (nearly) every frame of each track, not one per scenario: it follows usefulness frame by frame through each event. Tracks must be long enough to hold event windows (at least 25 frames between events); short benchmark snippets (8 observed + 12 predicted frames) are too short.
+REACT needs a forecast issued at (nearly) every frame of each track, not one per scenario: it follows usefulness frame by frame through each event. Tracks must be long enough to hold event windows (at least 25 observations between events by default); short benchmark snippets (8 observed + 12 predicted frames) are too short.
 
 ### 1. Per-step bivariate Gaussian `(mu_x, mu_y, sigma_x, sigma_y, rho)`
 
@@ -36,39 +36,48 @@ forecasts = rm.Forecasts.from_dataframe(
 )   # -> dict[id -> rm.Predictive]
 ```
 
-Or directly from arrays:
+Leads are read by value: a file with leads 1, 5, 10 and 15 gives forecasts at those leads and
+none in between. Or directly from arrays:
 
 ```python
-pred = rm.Predictive.gaussian(issue_frames, means, covs)  # means (n,H,D), covs (n,H,D,D)
+pred = rm.Predictive(issue_frames, means, covs)           # means (n,H,D), covs (n,H,D,D)
 pred = rm.Predictive.isotropic(issue_frames, means, sigma) # diagonal/isotropic shortcut
 ```
 
 ### 2. Gaussian mixtures (Trajectron++ and other multimodal models)
 
 ```python
-pred = rm.MixturePredictive(issue_frames, weights, means, covs)
-# weights (n, J) or (n, H, J); means (n, H, J, 2); covs (n, H, J, 2, 2)
+pred = rm.MixturePredictive(issue_frames, weights, component_means, component_covs)
+# weights (n, J) or (n, H, J); component_means (n, H, J, 2); component_covs (n, H, J, 2, 2)
 ```
 
 REACT scores mixtures natively. Collapsing a mixture to one Gaussian costs 0.4–0.8 nats per frame on pedestrian data, comparable to the whole signal, so pass the mixture when you have it.
 
 ### 3. K trajectories without a density
 
-```python
-pred = rm.Predictive.from_samples(issue_frames, samples,   # samples (n,H,S,D)
-                                  weights=mode_probs,       # optional (n,H,S)
-                                  method="moment")          # or "kde"
-```
+REACT is defined on densities, so samples need one chosen for them. `rm.SampleForecaster` puts
+a Gaussian kernel on each sample with a bandwidth fitted on the calibration tracks (see
+[Bring your own forecaster](forecasters.md#sampled-trajectories)); from arrays:
 
-REACT is defined on densities. Samples are moment-matched to one Gaussian, which penalizes multimodal forecasts heavily; treat results from this path with care.
+```python
+pred = rm.MixturePredictive.from_samples(issue_frames, samples,    # samples (n,H,S,D)
+                                         bandwidth=0.08)            # metres, or one per lead
+pred = rm.Predictive.from_samples(issue_frames, samples)          # one moment-matched Gaussian
+```
 
 ## Programmatic vs. CLI
 
-- **Python**: `dict[id -> Predictive]` or a `rm.Forecasts` object.
-- **CLI**: parquet (preferred, pandas-native) or an `.npz` bundle.
+- **Python**: `dict[id -> Predictive]`, as `rm.Forecasts.from_dataframe` returns.
+- **CLI**: parquet (preferred), CSV, or an `.npz` bundle from `rm.Forecasts.to_npz`, which keeps
+  mixtures and the type of the track ids.
 
 ```bash
-reactmetric evaluate --data tracks.parquet --forecasts my_preds.parquet \
+reactmetric evaluate --data tracks.parquet --forecasts my_preds.parquet --name MyModel \
     --info 3 4.2 6 --leads 5 10 --distortions 0.1 \
-    --out summary.json --records records.csv --plots out/
+    --out result.json --records records.csv --plots out/
+```
+
+It prints each model's REACT profile, writes the result (reload it with
+`rm.ReactResult.load("result.json")`), and makes its own calibration split unless you pass
+`--calibration calib.parquet`. `reactmetric evaluate --help` lists every option with its default.
 ```

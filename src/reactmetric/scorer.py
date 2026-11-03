@@ -497,7 +497,7 @@ class ReactScorer:
         climatology: a fitted climatology with an isotropic stopped regime; default
             fit_climatology(calib, leads).
         forecasts: optional models, scored on calm calibration stretches; their mean realized
-            score (diagnostics[lead]["calm_mean_score"]) is the demonstrated information, a
+            score (``diagnostics[lead]["calm_mean_score"]``) is the demonstrated information, a
             lower bound on I_traj.
         entropy_margin_info: levels at which outcomes are also recorded under the
             mixture-entropy distortion margin (the _H fields); default every level.

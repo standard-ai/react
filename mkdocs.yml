@@ -1,5 +1,5 @@
 site_name: reactmetric
-site_description: "REACT: a metric for how quickly trajectory forecasts recover after disruptive events."
+site_description: "REACT: how long a trajectory forecast stays wrong after a change in motion."
 theme:
   name: material
   palette:
@@ -16,6 +16,24 @@ markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
 
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false
+            docstring_style: google
+            show_root_heading: true
+            heading_level: 3
+            members_order: source
+            filters: ["!^_"]
+  - mkdocs-jupyter:
+      execute: false
+      include: ["*.ipynb"]
+      include_source: true
+
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
@@ -27,11 +45,17 @@ exclude_docs: |
   rigor-review-*.md
   react-spec.md
   recovery-rule.md
+  figures/
 
 nav:
   - Home: index.md
+  - Bring your own forecaster: forecasters.md
+  - Choosing events: events.md
+  - Reading results: results.md
+  - Tutorial: tutorial.ipynb
   - The REACT metric: concepts.md
   - Calibration: calibration.md
   - I/O formats: io.md
   - Datasets: datasets.md
-  - API reference: api.md
+  - API overview: api.md
+  - Reference: reference.md

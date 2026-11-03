@@ -42,7 +42,7 @@ data = rm.datasets.load_eth_ucy("eth", root="/path/to/ethucy")
 Calib vs evaluation for REACT is done **after load**:
 
 ```python
-calib, test = data.split(fraction=0.25, seed=0)
+calib, test = data.split(fraction=0.3, seed=0)
 ```
 
 ## Optional on-disk `dataset_split` packaging
@@ -80,6 +80,11 @@ Pedestrians crossing a platform of Eindhoven Centraal station, recorded at 10 Hz
 > physics-based modeling of pedestrian dynamics. *Physical Review E* 110(6), 064102.
 > <https://doi.org/10.1103/PhysRevE.110.064102>
 
+The full data are six 10-day parquet shards on Zenodo, each roughly 0.6 to 0.9 GB (days 01–10:
+862 MB). `load_eindhoven(download=True, days="01_10")` fetches one into
+`~/.cache/reactmetric/eindhoven/` with a progress line, once; `max_tracks=N, seed=0` then loads
+a random subset of the tracks long enough to use (`min_length`).
+
 Licensed [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Please cite both if you
 use the data. `load_eindhoven_sample()` returns a 40-track excerpt shipped with the package
 (tracks selected, values unmodified); the pretrained GRU baselines were trained on this data.
@@ -98,7 +103,7 @@ large sources.
 
 ```python
 data = rm.datasets.load_tracks(path="/path/to/tracks_sample.csv")
-calib, test = data.split(fraction=0.25, seed=0)
+calib, test = data.split(fraction=0.3, seed=0)
 ```
 
 ## Method-first philosophy

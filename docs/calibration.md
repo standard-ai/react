@@ -6,6 +6,6 @@ To separate skill from calibration, the paper rescales each forecaster's covaria
 
 Practical checks before reading REACT numbers:
 
-- **Units and frame rate.** Positions in metres at 10 Hz; covariances in square metres. Unit errors look like extreme miscalibration.
+- **Units.** Positions in metres, covariances in square metres. Unit errors look like extreme miscalibration, and REACT warns when a model's scores sit far below the climatology.
 - **Indexing.** The issue frame is the last observed frame and lead h targets issue + h ([I/O formats](io.md)). An off-by-one forecast scores as a lagging one.
-- **Demonstrated information.** Pass your models to `ReactScorer.fit(..., forecasts=...)`; `scorer.calibration[lead]["calm_mean_score"]` is each model's mean realized gain over climatology on calm stretches. A model far below the others there is likely miscalibrated or misaligned.
+- **Demonstrated information.** Pass your models to `ReactScorer.fit(..., forecasts=...)`; `scorer.diagnostics[lead]["calm_mean_score"]` is each model's mean realized gain over climatology on calm stretches. A model far below the others there is likely miscalibrated or misaligned.

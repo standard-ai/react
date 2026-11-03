@@ -6,7 +6,7 @@ Every REACT number depends on two choices and one assumption, and carries them:
 
 $$\mathrm{REACT}(h, d;\ I_{\text{traj}})$$
 
-the forecast lead $h$ (frames), an optional target distance $d$ (metres; $d = \infty$ is the plain comparison with climatology), and the assumed information level $I_{\text{traj}}$ (nats). The decision threshold, onset window and noise floor are fixed per dataset and reported once.
+the forecast lead $h$ (observations), an optional target distance $d$ (metres; $d = \infty$ is the plain comparison with climatology), and the assumed information level $I_{\text{traj}}$ (nats). The decision threshold, onset window and noise floor are fixed per dataset and reported once.
 
 ## Usefulness against a latent truth
 
@@ -39,7 +39,7 @@ and $\mathrm{REACT} = t_{\text{rec}} - t_0$.
 
 Recovery times are right-censored, so they are summarized with Kaplan–Meier curves: over all events (anticipated ones count as recovered at frame 0) and given onset. Median REACT is the median given onset; the restricted mean (area under the curve to 150 frames) stays informative when most events are anticipated. REACT is a profile, not one leaderboard number: anticipation, recovery time, completeness and relapse can favour different models.
 
-Library: `reactmetric.information.classify_lazy`; `ReactResult.summary()` and `ReactResult.table()`.
+Library: `ReactResult.table()` and `ReactResult.summary()`; [Reading results](results.md) explains every column.
 
 ## Distortion targets
 
@@ -55,7 +55,7 @@ Library: `reactmetric.information.distortion_margin`.
 
 Events come from the trajectory alone: an offline Bayesian changepoint model (Fearnhead 2006) on Savitzky–Golay-smoothed speed, turn rate and velocity components, with a tuned hazard and minimum segment length, then typed as stop, start, speed change or turn from the motion before and after. Detector errors change which transitions are evaluated (false events inflate anticipation; missed changes can show up as relapses). Labelled or externally defined events can be supplied instead.
 
-Library: `reactmetric.events.BayesianChangepoints.tuned_sg()`; `reactmetric.events.from_times` for your own events.
+Library: `reactmetric.events.BayesianChangepoints()`; `reactmetric.events.from_times` for your own events. [Choosing events](events.md) covers the types and how to select them.
 
 ## Climatology
 
@@ -67,23 +67,50 @@ Library: `reactmetric.reference.fit_climatology`.
 
 Oracle B is the hindsight posterior predictive under the same truth model: the most any forecast could extract given the assumptions. Its REACT is the earliest time a forecast's advantage could be confirmed, and its never-recovered rate shows whether a target is reachable.
 
-$I_{\text{traj}}$ is an assumption, not an estimate. A forecaster's mean gain on calm stretches bounds it from below (the *demonstrated information*). In simulation, under-assuming information causes false onsets for sharp forecasters while over-assuming is comparatively benign, so the paper reports 3, 4.2 and 6 nats and picks the headline by a stated rule: the lowest level at which Oracle B recovers on at least 95% of events at every lead (4.2 nats).
+$I_{\text{traj}}$ is an assumption, not an estimate. A forecaster's mean gain on calm stretches bounds it from below (the *demonstrated information*). In simulation, under-assuming information causes false onsets for sharp forecasters while over-assuming is comparatively benign, so the paper reports 3, 4.2 and 6 nats and picks the headline by a stated rule: the lowest level at which Oracle B recovers on at least 95% of events at every lead. The paper does not say at which target distance; on Eindhoven the rule gives its 4.2 nats at d = 0.1 m (3 nats at d = ∞), so the library judges it at the smallest finite target.
 
-Library: Oracle B is scored automatically as `oracle_B`; `reactmetric.select_info_level` applies the rule; `ReactScorer.calibration[lead]["calm_mean_score"]` holds the demonstrated information when models are passed to `fit`.
+Library: Oracle B is scored automatically as `oracle_B`; `ReactResult.headline_info()` applies the rule and `table()` uses it by default; `ReactScorer.diagnostics[lead]["calm_mean_score"]` holds the demonstrated information when models are passed to `fit`.
 
 ## Defaults
 
-The library's defaults are the paper's, at 10 Hz:
+The library's defaults are the paper's. Leads and windows are counted in observations; the
+paper's data were 10 Hz, so the right-hand column gives the time each default stands for there.
 
-| Setting | Default |
-| --- | --- |
-| leads $h$ | 1, 5, 10, 15 frames |
-| information levels | 3, 4.2, 6 nats |
-| target distances | $\infty$, 0.1 m, 0.3 m |
-| decision probability $\gamma$ | 0.95 |
-| onset window | $h + 5$ frames |
-| window | 150 frames (15 s) or the next event |
-| minimum window | 25 frames to the next event |
-| relapse | 3 consecutive frames starting within 10 frames of recovery |
-| noise floor | estimated from stationary calibration frames |
-| events | `BayesianChangepoints.tuned_sg()` (hazard 9e-4, minimum segment 30 frames) |
+| Setting | Argument | Default | At 10 Hz |
+| --- | --- | --- | --- |
+| leads $h$ | `leads` | 1, 5, 10, 15 | 0.1 to 1.5 s |
+| information levels | `info` | 3, 4.2, 6 nats | |
+| target distances | `distortions` | $\infty$, 0.1 m, 0.3 m | |
+| decision probability $\gamma$ | `p` | 0.95 | |
+| onset window | `onset_margin` | $h + 5$ frames | $h$ + 0.5 s |
+| event window | `window` | 150 frames or the next event | 15 s |
+| shortest event window | `min_window` | 25 frames | 2.5 s |
+| relapse | `relapse_run`, `relapse_window` | 3 consecutive frames starting within 10 of recovery | 0.3 s within 1 s |
+| calm stretches | `calm_exclusion` | 20 frames before to 60 after each event left out | 2 s, 6 s |
+| noise floor | `sigma` | estimated from stationary calibration frames (51-frame windows) | 5.1 s |
+| events | `events` | `BayesianChangepoints()`: hazard 9e-4 per frame, segments of at least 30 frames, 5-frame smoothing | 3 s, 0.5 s |
+
+## Other frame rates
+
+Nothing in REACT assumes 10 Hz: the climatology, the noise floor and the event kinematics use
+each track's own time step. The counts above, though, are counts. At another frame rate, decide
+what time spans you want and set the counts to match. For 5 Hz data, halving them keeps the
+paper's time spans:
+
+```python
+fps_ratio = 0.5                                     # your rate / 10 Hz
+n = lambda frames: max(1, round(frames * fps_ratio))
+det = rm.events.BayesianChangepoints(hazard=9e-4 / fps_ratio, min_size=n(30),
+                                     temper=3.0 * fps_ratio, smooth_window=3)
+scorer = rm.ReactScorer.fit(
+    calib, leads=(n(10),), events=det, window=n(150), min_window=n(25), onset_margin=n(5),
+    relapse_window=n(10), relapse_run=max(2, n(3)), calm_exclusion=(n(20), n(60)),
+    pre_window=n(30), sigma=rm.information.estimate_noise_floor(calib, window=n(51) | 1,
+                                                                 quad=max(3, n(9) | 1))[0],
+)
+```
+
+On 300 Eindhoven tracks downsampled to 5 Hz this keeps the 10 Hz ordering of constant velocity
+and IMM on anticipation and censoring, with median recovery 0.2–0.4 s later: fewer observations
+per second mean less evidence per second, so confident decisions take a little longer. Compare REACT numbers only between data at
+the same frame rate.
