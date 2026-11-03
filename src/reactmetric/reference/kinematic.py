@@ -35,7 +35,7 @@ from typing import Dict, Sequence, Tuple
 import numpy as np
 
 from ..constants import DEFAULT_DT
-from ..scoring.nll import LOG_2PI, gaussian_nll
+from ..scoring.nll import _LOG_2PI, _gaussian_nll
 from .base import (
     CV_VELOCITY_WINDOW,
     MAX_FIT_SAMPLES,
@@ -119,8 +119,8 @@ class KinematicClimatology:
             [cth * disp[:, 0] + sth * disp[:, 1], -sth * disp[:, 0] + cth * disp[:, 1]]
         )
         mu, cov = self._predict_moving(lead, speed)
-        nll_move = gaussian_nll(disp_body - mu, cov)
-        nll_stop = gaussian_nll(disp, self.stop_cov[lead])
+        nll_move = _gaussian_nll(disp_body - mu, cov)
+        nll_stop = _gaussian_nll(disp, self.stop_cov[lead])
         lam = self.move_weight(lead, speed)
         eps = 1e-12
         logp_move = np.log(lam + eps) - nll_move
@@ -260,7 +260,7 @@ class KinematicClimatology:
                 "n_samples": int(self.n_samples.get(lead, 0)),
                 "mixture_covariance": cov.tolist(),
                 "differential_entropy_gaussian_nats": float(
-                    1.0 + LOG_2PI + 0.5 * np.log(np.linalg.det(cov))
+                    1.0 + _LOG_2PI + 0.5 * np.log(np.linalg.det(cov))
                 ),
                 "cv_residual_covariance": self.cv_covs[lead].tolist(),
             }
@@ -430,8 +430,8 @@ def _fit_mixture_em_once(speeds, body, world, stop_speed, transition_band, bw, n
         pi = np.interp(speeds, grid, wgrid)
         mu_i = interp(mug)
         cov_i = interp(covg.reshape(n_knots, 4)).reshape(-1, 2, 2)
-        lp_move = np.log(pi) - gaussian_nll(body - mu_i, cov_i)
-        lp_stop = np.log(1.0 - pi) - gaussian_nll(world, scov)
+        lp_move = np.log(pi) - _gaussian_nll(body - mu_i, cov_i)
+        lp_stop = np.log(1.0 - pi) - _gaussian_nll(world, scov)
         peak = np.maximum(lp_move, lp_stop)
         ll = peak + np.log(np.exp(lp_move - peak) + np.exp(lp_stop - peak))
         trace.append(float(ll.mean()))

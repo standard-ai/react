@@ -3,7 +3,7 @@ import numpy as np
 from reactmetric.baselines import IMM, ConstantVelocity
 from reactmetric.baselines._kinematics import stack_tracks
 from reactmetric.constants import COV_REGULARIZATION
-from reactmetric.scoring.nll import LOG_2PI
+from reactmetric.scoring.nll import _LOG_2PI
 
 
 def _cv_tracks(n_tracks, T, accel, noise, dt=0.1, seed=0):
@@ -78,7 +78,7 @@ def _imm_scalar_loglik(imm, o, dt):
             K = Ps[j] @ H.T @ Si
             xs[j] = xs[j] + K @ r
             Ps[j] = (np.eye(4) - K @ H) @ Ps[j]
-            lik[j] = -0.5 * r @ Si @ r - 0.5 * np.linalg.slogdet(S)[1] - LOG_2PI
+            lik[j] = -0.5 * r @ Si @ r - 0.5 * np.linalg.slogdet(S)[1] - _LOG_2PI
         lm = np.log(cbar) + lik
         pk = lm.max()
         total += pk + np.log(np.exp(lm - pk).sum())

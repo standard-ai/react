@@ -1,13 +1,7 @@
-"""Log-score (negative log-likelihood) primitives, generalized to N dimensions.
+"""Internal log-score (negative log-likelihood) helpers, for any state dimension D.
 
-The internal pedestrian pipeline hardcoded closed-form 2x2 covariance inverses
-everywhere. Here the same math is written for arbitrary state dimension D with
-a fast path for D == 2 (the dominant case), so REACT works on 1D series, 2D
-floor positions, 3D poses, or anything else.
-
-A single Gaussian NLL evaluator (`gaussian_nll`) and a frozen Gaussian mixture
-(`GaussianMixtureND`) cover every density REACT scores against, including the
-mixture posteriors produced by the climatology-seeded oracle.
+`_gaussian_nll` is the Gaussian NLL evaluator behind ``Predictive.nll_matrix``, the kinematic
+reference and the IMM, with a closed-form fast path for D == 2.
 """
 
 from __future__ import annotations
@@ -16,7 +10,7 @@ import numpy as np
 
 from ..constants import COV_REGULARIZATION
 
-LOG_2PI = float(np.log(2.0 * np.pi))
+_LOG_2PI = float(np.log(2.0 * np.pi))
 
 
 def _solve_quadratic_2d(resid: np.ndarray, cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -31,7 +25,7 @@ def _solve_quadratic_2d(resid: np.ndarray, cov: np.ndarray) -> tuple[np.ndarray,
     return mahal, np.log(det)
 
 
-def gaussian_nll(resid: np.ndarray, cov: np.ndarray) -> np.ndarray:
+def _gaussian_nll(resid: np.ndarray, cov: np.ndarray) -> np.ndarray:
     """NLL of zero-mean residuals under a (shared or per-row) covariance.
 
     Args:
@@ -49,7 +43,7 @@ def gaussian_nll(resid: np.ndarray, cov: np.ndarray) -> np.ndarray:
 
     if dim == 2:
         mahal, logdet = _solve_quadratic_2d(resid, cov)
-        return 0.5 * mahal + 0.5 * logdet + dim * 0.5 * LOG_2PI
+        return 0.5 * mahal + 0.5 * logdet + dim * 0.5 * _LOG_2PI
 
     # General D: regularize, batched solve + slogdet.
     reg = cov + np.eye(dim) * COV_REGULARIZATION
@@ -57,12 +51,12 @@ def gaussian_nll(resid: np.ndarray, cov: np.ndarray) -> np.ndarray:
     sol = np.linalg.solve(reg, resid[:, :, None])[:, :, 0]   # (N, D)
     mahal = np.einsum("nd,nd->n", resid, sol)
     bad = sign <= 0
-    out = 0.5 * mahal + 0.5 * logdet + dim * 0.5 * LOG_2PI
+    out = 0.5 * mahal + 0.5 * logdet + dim * 0.5 * _LOG_2PI
     out[bad] = np.nan
     return out
 
 
-def eps_star_from_cov(cov: np.ndarray, d_meters: float) -> float:
+def _eps_star_from_cov(cov: np.ndarray, d_meters: float) -> float:
     """Necessary information (nats) to localize at RMS error ``d`` under N(., cov).
 
     Gaussian rate-distortion R(D) = 0.5 * log(det(Sigma) / det(Sigma_D)) with the
@@ -77,7 +71,7 @@ def eps_star_from_cov(cov: np.ndarray, d_meters: float) -> float:
     return max(0.0, 0.5 * np.log(det_clim / det_task))
 
 
-def supported_distortion_from_cov(cov: np.ndarray) -> float:
+def _supported_distortion_from_cov(cov: np.ndarray) -> float:
     """RMS localization scale where a N(., cov) reference needs zero nats."""
     cov = np.asarray(cov, dtype=float)
     dim = cov.shape[0]
@@ -85,7 +79,7 @@ def supported_distortion_from_cov(cov: np.ndarray) -> float:
     return float(np.sqrt(dim * det_clim ** (1.0 / dim)))
 
 
-class GaussianMixtureND:
+class _GaussianMixtureND:
     """Frozen D-dimensional Gaussian mixture with vectorized log-pdf.
 
     Parameters are plain arrays so the object pickles without sklearn. A fast
@@ -108,7 +102,7 @@ class GaussianMixtureND:
         cov[:, idx, idx] += COV_REGULARIZATION
         self._inv = np.linalg.inv(cov)
         sign, logdet = np.linalg.slogdet(cov)
-        self._log_norm = -0.5 * logdet - self.dim * 0.5 * LOG_2PI + np.log(
+        self._log_norm = -0.5 * logdet - self.dim * 0.5 * _LOG_2PI + np.log(
             np.clip(self.weights, 1e-300, None)
         )
 
@@ -158,48 +152,3 @@ class GaussianMixtureND:
             d = (m - mu)[:, None]
             cov += w * (c + d @ d.T)
         return cov
-
-
-def fuse_with_gaussian(
-    prior: GaussianMixtureND, mu: np.ndarray, cov: np.ndarray
-) -> GaussianMixtureND:
-    """Gaussian-sum Bayesian update of a mixture prior with one Gaussian observation.
-
-    Treats ``prior`` (over the displacement) as the prior and N(mu, cov) -- a
-    post-change constant-velocity displacement estimate -- as a soft observation.
-    The posterior is again a mixture:
-
-        Sigma_j' = (Sigma_j^-1 + cov^-1)^-1
-        mu_j'    = Sigma_j' (Sigma_j^-1 mu_j + cov^-1 mu)
-        w_j'     proportional to w_j * N(mu_j; mu, Sigma_j + cov)
-
-    As cov -> inf the update is inert (posterior == prior), so a forecast with no
-    usable post-change information collapses to the prior exactly and its
-    information score is identically zero.
-    """
-    mu = np.asarray(mu, dtype=float)
-    cov = np.asarray(cov, dtype=float)
-    dim = prior.dim
-    if not np.all(np.isfinite(cov)) or float(np.linalg.det(cov)) > 1e12:
-        return prior
-    reg = np.eye(dim) * COV_REGULARIZATION
-    inv_obs = np.linalg.inv(cov + reg)
-    c = len(prior.weights)
-    new_means = np.empty((c, dim))
-    new_covs = np.empty((c, dim, dim))
-    log_w = np.empty(c)
-    for j in range(c):
-        sigma_j = prior.covs[j] + reg
-        inv_j = np.linalg.inv(sigma_j)
-        sigma_post = np.linalg.inv(inv_j + inv_obs)
-        new_means[j] = sigma_post @ (inv_j @ prior.means[j] + inv_obs @ mu)
-        new_covs[j] = sigma_post
-        s = sigma_j + cov
-        diff = prior.means[j] - mu
-        _, logdet = np.linalg.slogdet(s)
-        mahal = float(diff @ np.linalg.solve(s, diff))
-        log_w[j] = np.log(max(prior.weights[j], 1e-300)) - 0.5 * (logdet + mahal)
-    log_w -= log_w.max()
-    w = np.exp(log_w)
-    w /= w.sum()
-    return GaussianMixtureND(weights=w, means=new_means, covs=new_covs)

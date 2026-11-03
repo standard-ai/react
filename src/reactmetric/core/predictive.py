@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from ..scoring.nll import gaussian_nll
+from ..scoring.nll import _gaussian_nll
 
 
 class Predictive:
@@ -151,7 +151,7 @@ class Predictive:
         diff = observations[targets_clipped] - self.means              # (n, H, D)
         flat_resid = diff.reshape(-1, dim)
         flat_cov = self.covs.reshape(-1, dim, dim)
-        nll = gaussian_nll(flat_resid, flat_cov).reshape(n, hh)
+        nll = _gaussian_nll(flat_resid, flat_cov).reshape(n, hh)
         out = np.where(valid, nll, np.nan)
         return out
 
@@ -234,7 +234,7 @@ class MixturePredictive(Predictive):
         valid = (targets >= 0) & (targets < t)
         y = observations[np.clip(targets, 0, t - 1)]                     # (n, H, D)
         diff = (y[:, :, None, :] - self.component_means).reshape(-1, dim)
-        comp = -gaussian_nll(diff, self.component_covs.reshape(-1, dim, dim)).reshape(n, hh, J)
+        comp = -_gaussian_nll(diff, self.component_covs.reshape(-1, dim, dim)).reshape(n, hh, J)
         w = self.weights if self.weights.ndim == 3 else self.weights[:, None, :]
         w = w / w.sum(-1, keepdims=True)
         lp = comp + np.log(np.clip(w, 1e-300, None))

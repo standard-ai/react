@@ -1,23 +1,6 @@
-"""Scoring rules used by REACT.
+"""Internal scoring helpers (the log score); nothing here is public API.
 
-`nll` is the log score, a strictly proper scoring rule whose pointwise difference
-from the climatology is the realized information score REACT keys off.
+The NLL REACT keys off is ``Predictive.nll_matrix`` / ``MixturePredictive.nll_matrix``.
 """
 
-from .nll import (
-    LOG_2PI,
-    GaussianMixtureND,
-    eps_star_from_cov,
-    fuse_with_gaussian,
-    gaussian_nll,
-    supported_distortion_from_cov,
-)
-
-__all__ = [
-    "LOG_2PI",
-    "GaussianMixtureND",
-    "gaussian_nll",
-    "eps_star_from_cov",
-    "supported_distortion_from_cov",
-    "fuse_with_gaussian",
-]
+__all__: list = []

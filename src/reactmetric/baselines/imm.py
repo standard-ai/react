@@ -22,7 +22,7 @@ from ..constants import COV_REGULARIZATION
 from ..core.predictive import Predictive
 from ..core.trajectory import Trajectory
 from ..forecasters.base import BaseForecaster
-from ..scoring.nll import LOG_2PI
+from ..scoring.nll import _LOG_2PI
 from ._kinematics import _CalibratedNoise, stack_tracks
 
 
@@ -195,7 +195,7 @@ class IMM(BaseForecaster):
             lik = (
                 -0.5 * np.einsum("nja,njab,njb->nj", r, Si, r)
                 - 0.5 * np.linalg.slogdet(S)[1]
-                - LOG_2PI
+                - _LOG_2PI
             )
             log_mu = np.log(cbar) + lik
             peak = log_mu.max(axis=1, keepdims=True)
@@ -374,7 +374,7 @@ class IMM(BaseForecaster):
                 xs[j] = xs[j] + K @ resid
                 Ps[j] = (np.eye(4) - K @ Hmat) @ Ps[j]
                 _, log_det = np.linalg.slogdet(S)
-                likelihoods[j] = -0.5 * float(resid @ S_inv @ resid) - 0.5 * log_det - LOG_2PI
+                likelihoods[j] = -0.5 * float(resid @ S_inv @ resid) - 0.5 * log_det - _LOG_2PI
 
             log_mu = np.log(np.maximum(M.T @ mu, 1e-300)) + likelihoods
             log_mu -= log_mu.max()
