@@ -1,3 +1,6 @@
+import io
+import os
+
 import numpy as np
 import pytest
 
@@ -33,6 +36,44 @@ def test_load_eindhoven_without_cache_or_download_raises(tmp_path):
     assert str(tmp_path) in str(err.value) and "load_eindhoven_sample" in str(err.value)
     with pytest.raises(FileNotFoundError):
         rm.datasets.load_dataset("eindhoven", cache_dir=str(tmp_path))
+
+
+class _FakeResponse(io.BytesIO):
+    def __init__(self, payload, fail=False):
+        super().__init__(payload)
+        self.headers = {"Content-Length": str(len(payload))}
+        self.fail = fail
+
+    def read(self, n=-1):
+        if self.fail and self.tell() > 0:
+            raise ConnectionError("dropped")
+        return super().read(n)
+
+
+@pytest.mark.parametrize("progress", [True, False])
+def test_download_eindhoven_reports_progress_and_renames(tmp_path, monkeypatch, capsys, progress):
+    from reactmetric.datasets import eindhoven as eh
+
+    name = eh._DAY_FILES["01_10"]
+    monkeypatch.setattr(eh, "eindhoven_file_manifest", lambda: {name: {"url": "x", "size": 0}})
+    monkeypatch.setattr(eh.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(b"x" * 5000))
+    path = eh.download_eindhoven(cache_dir=str(tmp_path), chunk_size=1000, progress=progress)
+    assert open(path, "rb").read() == b"x" * 5000
+    assert os.listdir(os.path.dirname(path)) == [name]
+    err = capsys.readouterr().err
+    assert ("100%" in err and " MB)" in err) if progress else err == ""
+
+
+def test_download_eindhoven_leaves_no_partial_file(tmp_path, monkeypatch):
+    from reactmetric.datasets import eindhoven as eh
+
+    name = eh._DAY_FILES["01_10"]
+    monkeypatch.setattr(eh, "eindhoven_file_manifest", lambda: {name: {"url": "x"}})
+    monkeypatch.setattr(eh.urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResponse(b"x" * 5000, fail=True))
+    with pytest.raises(ConnectionError):
+        eh.download_eindhoven(cache_dir=str(tmp_path), chunk_size=1000, progress=False)
+    assert os.listdir(tmp_path / "eindhoven") == []
 
 
 def test_unified_load_uses_eindhoven_mapping(tmp_path):

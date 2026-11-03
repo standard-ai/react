@@ -23,7 +23,8 @@ from __future__ import annotations
 import csv
 import json
 import os
-import shutil
+import sys
+import tempfile
 import urllib.request
 from importlib import resources
 from typing import Dict, Optional, Sequence
@@ -85,16 +86,45 @@ def eindhoven_file_manifest() -> Dict[str, Dict[str, object]]:
     }
 
 
+def _copy_with_progress(response, out, total: Optional[int], label: str, chunk_size: int,
+                        progress: bool) -> None:
+    """Copy ``response`` to ``out``, rewriting one stderr line with percent and MB."""
+    done, shown = 0, None
+    while True:
+        chunk = response.read(chunk_size)
+        if not chunk:
+            break
+        out.write(chunk)
+        done += len(chunk)
+        if not progress:
+            continue
+        mb = done / 1e6
+        if total:
+            pct = int(100 * done / total)
+            line = f"{label}: {pct:3d}% ({mb:.0f} / {total / 1e6:.0f} MB)"
+            key = pct
+        else:
+            line, key = f"{label}: {mb:.0f} MB", int(mb)
+        if key != shown:
+            sys.stderr.write("\r" + line)
+            sys.stderr.flush()
+            shown = key
+    if progress:
+        sys.stderr.write("\n")
+
+
 def download_eindhoven(
     days: str = "01_10",
     cache_dir: Optional[str] = None,
     force: bool = False,
     chunk_size: int = 1024 * 1024,
+    progress: bool = True,
 ) -> str:
     """Download one 10-day Eindhoven parquet shard from Zenodo into a cache.
 
-    This is intentionally explicit because each shard is hundreds of MB and the
-    full dataset is about 4.6 GB.
+    This is intentionally explicit because each shard is hundreds of MB (about 860 MB for
+    days 01_10) and the full dataset is about 4.6 GB. Progress goes to stderr unless
+    ``progress=False``; the file appears in the cache only once it is complete.
     """
     if days not in _DAY_FILES:
         raise ValueError(f"days must be one of {tuple(_DAY_FILES)}; got {days!r}")
@@ -108,10 +138,17 @@ def download_eindhoven(
     if filename not in manifest:
         raise RuntimeError(f"{filename} not found in Zenodo record {ZENODO_RECORD_ID}")
     url = str(manifest[filename]["url"])
-    tmp = f"{path}.part"
-    with urllib.request.urlopen(url, timeout=60) as response, open(tmp, "wb") as out:
-        shutil.copyfileobj(response, out, length=chunk_size)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=cache, prefix=f".{filename}.", suffix=".part")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, os.fdopen(fd, "wb") as out:
+            total = response.headers.get("Content-Length") or manifest[filename].get("size")
+            _copy_with_progress(response, out, int(total) if total else None, filename,
+                                chunk_size, progress)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     return path
 
 
