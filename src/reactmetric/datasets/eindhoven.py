@@ -241,15 +241,17 @@ def load_eindhoven(
     max_tracks: Optional[int] = None,
     dt: Optional[float] = None,
 ) -> TrajectorySet:
-    """Load Eindhoven Centraal trajectories from parquet, cache, or bundled sample.
+    """Load Eindhoven Centraal trajectories from a parquet/CSV file or the download cache.
 
-    Mapping (columns, mm/ms scales, default dt) is ``mappings.eindhoven``.
+    Mapping (columns, mm/ms scales, default dt) is ``mappings.eindhoven``. The bundled
+    excerpt is ``load_eindhoven_sample()``; this never falls back to it.
 
     Args:
         path: Direct path to a Zenodo parquet shard or CSV in Eindhoven schema.
         days: Which 10-day shard to download/load when ``path`` is not provided.
         cache_dir: Optional cache root; defaults to ``~/.cache/reactmetric``.
-        download: If True, fetch the requested shard from Zenodo when absent.
+        download: If True, fetch the requested shard from Zenodo when absent; if False
+            and it is not cached, raise FileNotFoundError.
         min_length: Drop trajectories shorter than this many frames.
         max_tracks: Optional cap after loading, useful for quick demos.
         dt: Expected nominal frame interval (10 Hz = 0.1s).
@@ -268,7 +270,11 @@ def load_eindhoven(
         elif download:
             path = download_eindhoven(days=days, cache_dir=cache_dir)
         else:
-            return load_eindhoven_sample(min_length=min_length, dt=dt)
+            raise FileNotFoundError(
+                f"no cached Eindhoven shard at {cached}; pass download=True to fetch it from "
+                f"Zenodo (one 10-day shard, about 860 MB for days 01_10), or use "
+                f"load_eindhoven_sample() for the bundled 40-track excerpt"
+            )
 
     if path.endswith(".csv"):
         # Prefer the unified mapping-driven loader for ordinary CSV.

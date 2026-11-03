@@ -27,9 +27,12 @@ def test_eindhoven_sample_loads_and_has_schema():
     assert rm.datasets.mappings.eindhoven.position_scale == 1e-3
 
 
-def test_load_eindhoven_without_download_uses_sample(tmp_path):
-    ts = rm.datasets.load_eindhoven(cache_dir=str(tmp_path), download=False)
-    assert len(ts) > 10
+def test_load_eindhoven_without_cache_or_download_raises(tmp_path):
+    with pytest.raises(FileNotFoundError, match="download=True") as err:
+        rm.datasets.load_eindhoven(cache_dir=str(tmp_path), download=False)
+    assert str(tmp_path) in str(err.value) and "load_eindhoven_sample" in str(err.value)
+    with pytest.raises(FileNotFoundError):
+        rm.datasets.load_dataset("eindhoven", cache_dir=str(tmp_path))
 
 
 def test_unified_load_uses_eindhoven_mapping(tmp_path):
