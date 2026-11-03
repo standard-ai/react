@@ -279,3 +279,16 @@ def test_shared_events_warn_only_when_models_disagree(scorer):
     with pytest.warns(RuntimeWarning, match="lack a forecast window from every model"):
         res = scorer.evaluate({"CV": baselines.ConstantVelocity(), "Late": Late()}, test)
     assert res.coverage[5]["Late"] < res.coverage[5]["CV"]
+
+
+def test_event_selection(scorer, result):
+    import reactmetric as rm
+
+    stops = result.subset(event_type="stop")
+    assert {r["event_type"] for r in stops.records} == {"stop"}
+    assert stops.table(lead=5)["events"].iloc[0] <= result.table(lead=5)["events"].iloc[0]
+    with pytest.raises(ValueError, match="no records"):
+        result.subset(event_type="nothing")
+    only = rm.events.select(scorer.events, types="stop")
+    test = _tracks(2, seed=15)
+    assert all(e.event_type == "stop" for t in test.ids for e in only.detect(test[t]))

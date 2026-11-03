@@ -382,6 +382,24 @@ class ReactResult:
             "event_source": type(sc.events).__name__,
         }
 
+    def subset(self, where=None, **fields) -> ReactResult:
+        """The records matching every field (a value or a list of values), e.g.
+        subset(event_type="stop") or subset(model=["MyModel", "oracle_B"]), and where(record)
+        if given. Windows stay as detected."""
+        def ok(r):
+            for k, v in fields.items():
+                if k not in r:
+                    raise KeyError(f"records have no field {k!r}")
+                if r[k] not in ((v,) if isinstance(v, (str, int, float)) else tuple(v)):
+                    return False
+            return where is None or bool(where(r))
+
+        recs = [r for r in self.records if ok(r)]
+        if not recs:
+            raise ValueError(f"no records match {fields}")
+        return ReactResult(records=recs, scorer=self.scorer, timing=self.timing,
+                           coverage=self.coverage, meta=self.meta)
+
     # -- summaries -----------------------------------------------------------------------------
 
     def summary(self, by=None) -> Dict[Tuple, Dict]:
