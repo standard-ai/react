@@ -1012,11 +1012,14 @@ def _event_coverage(records, names, model_leads, leads, shared=True):
         coverage[lead] = {"events": len(events), "shared": len(common),
                           **{m: len(got[m]) for m in present}}
         keep[lead] = common
-        dropped = len(events) - len(common)
-        if shared and dropped and present:
-            short = {m: len(events) - len(got[m]) for m in present if len(got[m]) < len(events)}
+        # events no model covers (too early in a track for any history) drop silently; warn
+        # only when the models disagree among themselves
+        union = set().union(*(got[m] for m in present)) if present else set()
+        dropped = len(union - common)
+        if shared and dropped:
+            short = {m: len(union) - len(got[m]) for m in present if len(got[m]) < len(union)}
             warnings.warn(
-                f"lead {lead}: {dropped} of {len(events)} events lack a forecast window from "
+                f"lead {lead}: {dropped} of {len(union)} events lack a forecast window from "
                 f"every model and are left out so all models are compared on the same "
                 f"{len(common)} events (events missing per model: {short}); pass "
                 f"event_set='all' to keep them", RuntimeWarning, stacklevel=3,

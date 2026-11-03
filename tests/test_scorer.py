@@ -259,3 +259,23 @@ def test_windows_are_settings(tmp_path_factory):
     assert res.settings()["window_frames"] == 60
     assert all(r["duration"] is None or r["duration"] <= 60 for r in res.records)
     assert all(r["onset"] is None or r["onset"] <= 5 + 2 for r in res.records)
+
+
+def test_shared_events_warn_only_when_models_disagree(scorer):
+    import warnings
+
+    from reactmetric.core.predictive import Predictive
+
+    class Late:  # forecasts only from frame 400, so misses the first event (frame 200)
+        def predict(self, traj):
+            p = baselines.ConstantVelocity().predict(traj)
+            keep = p.issue_frames >= 400
+            return Predictive(p.issue_frames[keep], p.means[keep], p.covs[keep])
+
+    test = _tracks(3, seed=14)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        scorer.evaluate({"CV": baselines.ConstantVelocity(), "CTRV": baselines.CTRV()}, test)
+    with pytest.warns(RuntimeWarning, match="lack a forecast window from every model"):
+        res = scorer.evaluate({"CV": baselines.ConstantVelocity(), "Late": Late()}, test)
+    assert res.coverage[5]["Late"] < res.coverage[5]["CV"]

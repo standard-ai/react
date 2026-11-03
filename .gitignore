@@ -36,3 +36,6 @@ outputs/
 # Locally exported dataset subsets (large, regenerable)
 .data/
 examples/react_tutorial/
+docs/figures/_headline_cache/
+!docs/assets/*.png
+docs/figures/headline_result.json
