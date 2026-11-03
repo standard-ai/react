@@ -1,21 +1,15 @@
 """Pretrained pedestrian GRU baselines (extras=[torch]).
 
-Two models trained on a large corpus of retail pedestrian motion for the
-original REACT research:
+Two recurrent forecasters trained on Eindhoven pedestrian tracks at 10 Hz (Pouw et al., CC-BY-4.0),
+the ones the paper reports:
 
-* ``GRUPosition`` — history of normalized (x, y); checkpoint
-  ``gru_position_best.pt``
-* ``GRUOrientation`` — normalized (x, y) plus sin/cos heading; checkpoint
+* ``GRUPosition``: history of normalized (x, y); checkpoint ``gru_position_best.pt``
+* ``GRUOrientation``: normalized (x, y) plus sin/cos heading; checkpoint
   ``gru_orientation_best.pt``
 
-Both ship with their weights under ``reactmetric.baselines.checkpoints`` and
-are registered as default comparison baselines when torch is installed.
-
-Retrained / scratch checkpoints from ``scripts/train_gru_baselines.py`` expect
-inputs on an approximately **10 Hz** (``dt=0.1``) frame grid — the training
-script regrids the retail data (~6.25 Hz) and Eindhoven onto that rate before windowing.
-Pass trajectories that are already near 10 Hz (e.g. Eindhoven) or resample
-upstream before calling ``predict``.
+Both read a 30-observation history and output a Gaussian for each of the next 15 observations.
+They were trained on 10 Hz tracks, so give them trajectories at that rate (resample upstream
+otherwise). The weights ship under ``reactmetric.baselines.checkpoints``; see its NOTICE.md.
 """
 
 from __future__ import annotations
@@ -88,7 +82,7 @@ def _normalize_trajectory(
 
 
 class _GRUTrajectoryNet:  # pragma: no cover - thin torch wrapper
-    """Architecture matching the original ``GRUTrajectoryPredictor`` checkpoints."""
+    """GRU encoder with an MLP head giving a mean and log variance per lead."""
 
     def __init__(
         self,
@@ -153,7 +147,7 @@ class _GRUBase(BaseForecaster):
             ) from e
 
         path = checkpoint or default_checkpoint_path(self.variant)
-        ckpt = torch.load(path, map_location=device, weights_only=False)
+        ckpt = torch.load(path, map_location=device, weights_only=True)
         cfg = ckpt.get("config", {}) if isinstance(ckpt, dict) else {}
         state = (
             ckpt.get("model_state_dict", ckpt)
@@ -161,6 +155,7 @@ class _GRUBase(BaseForecaster):
             else ckpt
         )
 
+        self._args = (checkpoint, history, horizon, device, name)
         self.history = int(history if history is not None else cfg.get("history_length", 30))
         self.horizon = int(
             horizon if horizon is not None else cfg.get("forecast_horizon", 15)
@@ -185,6 +180,14 @@ class _GRUBase(BaseForecaster):
         self.model = wrap.net.to(device)
         self.model.load_state_dict(state)
         self.model.eval()
+
+    # the network class is built inside a function, so pickle (e.g. for evaluate's worker
+    # processes) carries the constructor arguments and each process reloads the checkpoint
+    def __getstate__(self):
+        return {"args": self._args}
+
+    def __setstate__(self, state):
+        self.__init__(*state["args"])
 
     def predict(self, traj: Trajectory) -> Optional[Predictive]:
         if traj.D != 2:
@@ -224,7 +227,7 @@ class _GRUBase(BaseForecaster):
         for i in range(n):
             ih = init_headings[i]
             c, s = np.cos(-ih), np.sin(-ih)
-            # Match the original GRUForecaster denormalization (row-vector @ rot).
+            # undo the normalization (row vectors, so world = normalized @ rot)
             rot = np.array([[c, -s], [s, c]])
             means[i] = mean_norm[i, :horizon] @ rot + origins[i]
             # The network's variances live in the heading-aligned frame (along-track,
