@@ -129,5 +129,4 @@ cite it too if you use them.
 
 ## License
 
-Apache-2.0. Developed at Standard Labs, a lab within Standard AI, by Calvin Breseman and
-David M. Woollard.
+Apache-2.0. Developed at Standard Labs @Standard AI by Calvin Breseman and David M. Woollard.

@@ -5,6 +5,11 @@
 # fit unchanged, so the rows for those tracks must be identical.
 #   tests/parity/run_parity.sh [N=5]
 #
+# Run it in the paper's environment (react-reproducibility/requirements.txt: numpy 2.5.0,
+# scipy 1.18.0, pandas 3.0.3, torch 2.13.0). With newer torch, Trajectron++'s mixture scores
+# move in the 8th digit (s_sum, s_mix_sum, I_sum, pre_s_sum on Trajectron_mix rows); every
+# outcome and every other model still matches.
+#
 # Inputs, overridable by environment:
 #   REACT_REPRO_DIR  clone of github.com/calvin-breseman/react-reproducibility: the reference
 #                    rows (subsets up to 20 tracks) and the paper's checkpoints and IMM fit
