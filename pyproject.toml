@@ -61,6 +61,12 @@ all = [
     "torch>=1.12",
 ]
 
+[project.urls]
+Homepage = "https://github.com/standard-ai/react"
+Source = "https://github.com/standard-ai/react"
+Issues = "https://github.com/standard-ai/react/issues"
+Changelog = "https://github.com/standard-ai/react/blob/main/CHANGELOG.md"
+
 [project.scripts]
 reactmetric = "reactmetric.cli:main"
 
@@ -87,14 +93,8 @@ include = [
   "/mkdocs.yml",
   "/pyproject.toml",
 ]
-# internal working notes, paper-parity checks that need local clones, and run outputs
+# paper-parity checks that need local clones, and run outputs
 exclude = [
-  "/docs/paper-todo.md",
-  "/docs/todo-tonight.md",
-  "/docs/revision-status.md",
-  "/docs/rigor-review-*.md",
-  "/docs/react-spec.md",
-  "/docs/recovery-rule.md",
   "/tests/parity",
   "/examples/react_tutorial/**",
   "__pycache__",

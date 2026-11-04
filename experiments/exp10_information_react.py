@@ -1,6 +1,4 @@
-"""Exp 10: REACT in the information formulation (../docs/react-spec.md), on Eindhoven.
-
-Uses the same track draw, split and 'low'-preset events as exp09 seed 0.
+"""Exp 10: the paper's REACT run (information formulation) on Eindhoven or Day in the Life.
 
 Reference: the kinematic climatology conditioned on the velocity over the last
 --velocity-window frames (default 1: the last observed step), with its stopped/moving share
@@ -12,9 +10,9 @@ Models: the Kalman constant-velocity filter and the IMM have their noise paramet
 maximum likelihood on the calibration tracks' one-step innovations (ConstantVelocity.fit,
 IMM.fit). CTRV keeps its hand-set parameters. GRU checkpoints can be supplied with
 --gru-dir (a directory holding gru_position_best.pt and gru_orientation_best.pt); otherwise
-the shipped retail-trained checkpoints are used.
+the shipped Eindhoven-trained checkpoints are used.
 Trajectron++ (--tpp-dir, a clone of the repository; the Eindhoven run-1 checkpoint is in
-../artifacts/trajectron/eindhoven_run1) enters twice from one network pass: "Trajectron"
+react-reproducibility's artifacts/eindhoven/trajectron_run1) enters twice from one network pass: "Trajectron"
 (moment-matched Gaussian) and "Trajectron_mix" (all 25 components, no pruning or merging, in the
 realized score and the tests; reactmetric.information.MixtureForecast / RegimeTestsMixture).
 The base case, recorded as distortion 0.0 (label "clim"), has no target: the climatology's own
@@ -635,23 +633,6 @@ def main():
                     if cells:
                         print(f"  lead {lead:>2} I {info:>4.2f} {m:>16}: " + "   ".join(cells))
 
-    prev = os.path.join(ROOT, "outputs", "exp09", f"seed{args.seed}_n{args.tracks}.json")
-    if os.path.exists(prev):
-        p9 = json.load(open(prev))
-        print(
-            "SAME EVENTS UNDER THE EARLIER RULES (exp09): "
-            "KM-median REACT, 3/3 rule | posterior rule"
-        )
-        for m in MODEL_NAMES:
-            cells = [p9["cells"].get(f"{m}|{lead}") for lead in LEADS]
-            print(
-                f"  {m:>16}: "
-                + "   ".join(
-                    f"lead {lead}: {fmt(c['cur_km'], 4)} | {fmt(c['post_km'], 4)}"
-                    for lead, c in zip(LEADS, cells)
-                    if c
-                )
-            )
     print(f"\ntotal {(time.time() - t_start) / 60:.1f} min; outputs in {args.out}")
 
 

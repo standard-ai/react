@@ -9,7 +9,7 @@ the same average can differ completely in how they handle a change. REACT (Regim
 Adaptive Correction Time) finds the changes and measures what happens to each forecast around
 them.
 
-![One event and the recovery curves of three forecasters on Eindhoven](docs/assets/react_headline.png)
+![One event and the recovery curves of three forecasters on Eindhoven](https://raw.githubusercontent.com/standard-ai/react/main/docs/assets/react_headline.png)
 
 *Left: a pedestrian turns around and slows. Constant velocity's forecast 10 frames ahead falls
 behind a simple climatological reference at once and is confidently ahead again 12 frames
@@ -61,14 +61,14 @@ result.to_json("react.json")                         # rm.ReactResult.load("reac
 ```
 
 `python examples/quickstart.py` runs the whole workflow with three baselines in a couple of
-minutes. The [tutorial notebook](examples/tutorial.ipynb) walks through it on real data,
+minutes. The [tutorial notebook](https://github.com/standard-ai/react/blob/main/examples/tutorial.ipynb) walks through it on real data,
 including how to choose which events to measure.
 
 ## What you need
 
 - **Tracks:** positions in metres, one array per track, observed at a fixed interval. Leads
   and windows are counted in observations; the defaults are the paper's, and
-  [docs/concepts.md](docs/concepts.md) says how to set them for your data.
+  [docs/concepts.md](https://github.com/standard-ai/react/blob/main/docs/concepts.md) says how to set them for your data.
 - **Held-out calibration tracks** from the same setting. REACT fits its reference, noise floor
   and truth model on them once, and every model is then scored against that same fit.
 - **Forecasts** at every frame you want scored, in one of these forms:
@@ -80,7 +80,7 @@ including how to choose which events to measure.
     line).
 
   The issue frame is the last frame the forecast saw, and lead `h` targets the frame `h`
-  later, as in ETH/UCY and Argoverse. [docs/forecasters.md](docs/forecasters.md) shows each
+  later, as in ETH/UCY and Argoverse. [docs/forecasters.md](https://github.com/standard-ai/react/blob/main/docs/forecasters.md) shows each
   form in a few lines.
 - **Events:** detected from the tracks by default; bring your own times if you have labels.
 
@@ -93,7 +93,7 @@ decides, with posterior probability at least 0.95, when the forecast is truly be
 onset) and when it is truly ahead again (the recovery). The truth model, the events and the
 reference are shared by every model on a dataset; only the forecast density differs. Oracle B,
 the best forecast those assumptions allow, is scored alongside as the floor.
-[docs/concepts.md](docs/concepts.md) has the details.
+[docs/concepts.md](https://github.com/standard-ai/react/blob/main/docs/concepts.md) has the details.
 
 ## Install
 
